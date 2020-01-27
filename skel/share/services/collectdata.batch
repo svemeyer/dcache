@@ -1,0 +1,10 @@
+check -strong collectdata.cell.name
+check -strong collectdata.instance.uid
+check -strong collectdata.instance.location.lat
+check -strong collectdata.instance.location.lon
+
+create org.dcache.cells.UniversalSpringCell "${collectdata.cell.name}" \
+    "classpath:org/dcache/collectdata/collectdata.xml \
+    -uid=\"${collectdata.instance.uid}\" \
+    -lat=\"${collectdata.instance.location.lat}\" \
+    -lon=\"${collectdata.instance.location.lon}\""
