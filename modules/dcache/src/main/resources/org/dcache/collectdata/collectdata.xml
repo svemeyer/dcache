@@ -21,7 +21,7 @@
 
     <bean id="instance-data" class="org.dcache.collectdata.InstanceData">
         <property name="poolManagerStub" ref="poolManagerStub"/>
-        <property name="sideid" value="${sideid}"/>
+        <property name="siteid" value="${siteid}"/>
         <property name="lon" value="${lon}"/>
         <property name="lat" value="${lat}"/>
     </bean>
