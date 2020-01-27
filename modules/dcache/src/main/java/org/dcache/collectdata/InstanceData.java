@@ -30,7 +30,7 @@ public class InstanceData {
     }
 
     @Required
-    public void setSiteId(String siteid) {
+    public void setSiteid(String siteid) {
         this.siteid = siteid;
     }
 
@@ -107,7 +107,7 @@ public class InstanceData {
         }
     }
 
-    public String getSiteId() {
+    public String getSiteid() {
         return this.siteid;
     }
 
