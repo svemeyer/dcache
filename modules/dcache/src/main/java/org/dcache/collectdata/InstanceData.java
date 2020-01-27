@@ -16,7 +16,7 @@ import java.util.*;
 
 public class InstanceData {
     private CellStub poolManagerStub;
-    private String uid;
+    private String siteid;
 
     private Map<String, Double> location = new HashMap<String, Double>();
     private String version;
@@ -30,8 +30,8 @@ public class InstanceData {
     }
 
     @Required
-    public void setUid(String uid) {
-        this.uid = uid;
+    public void setSiteId(String siteid) {
+        this.siteid = siteid;
     }
 
     @Required
@@ -75,7 +75,7 @@ public class InstanceData {
     }
 
     public String toJson() {
-        return "{\n\t\"version\":\t\"" + this.version + "\",\n\t\"uid\":\t\"" + this.uid + "\",\n\t\"location\":\n\t{" +
+        return "{\n\t\"version\":\t\"" + this.version + "\",\n\t\"siteid\":\t\"" + this.siteid + "\",\n\t\"location\":\n\t{" +
                 "\n\t\t\"lon\":" + this.location.get("longitude") + ",\n\t\t\"lat\":" + this.location.get("latitude") +
                 "\n\t}," + "\n\t\"storage\":\t" + this.storage + ",\n\t\"@timestamp\":\t\""+
                 new SimpleDateFormat("YYYY-MM-dd HH:mm:ss").format(new Timestamp(System.currentTimeMillis())) +
@@ -107,8 +107,8 @@ public class InstanceData {
         }
     }
 
-    public String getUid() {
-        return this.uid;
+    public String getSiteId() {
+        return this.siteid;
     }
 
     public void refreshData() {
