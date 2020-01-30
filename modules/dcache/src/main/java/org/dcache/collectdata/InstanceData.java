@@ -10,8 +10,6 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
 
-import java.sql.Timestamp;
-import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class InstanceData {
@@ -44,7 +42,7 @@ public class InstanceData {
         location.put("latitude", lat);
     }
 
-    public InstanceData () {
+    public void init() {
         this.version = getVersion();
         this.storage = getStorage();
     }
@@ -77,9 +75,7 @@ public class InstanceData {
     public String toJson() {
         return "{\n\t\"version\":\t\"" + this.version + "\",\n\t\"siteid\":\t\"" + this.siteid + "\",\n\t\"location\":\n\t{" +
                 "\n\t\t\"lon\":" + this.location.get("longitude") + ",\n\t\t\"lat\":" + this.location.get("latitude") +
-                "\n\t}," + "\n\t\"storage\":\t" + this.storage + ",\n\t\"@timestamp\":\t\""+
-                new SimpleDateFormat("YYYY-MM-dd HH:mm:ss").format(new Timestamp(System.currentTimeMillis())) +
-                "\"\n}";
+                "\n\t},\n\t\"storage\":\t" + this.storage + "\n}";
     }
 
     private String getVersion() {
@@ -90,7 +86,6 @@ public class InstanceData {
     private double getStorage() {
         PoolMonitor monitor;
         double space = 0.0;
-
         try {
             monitor = poolManagerStub.sendAndWait(new PoolManagerGetPoolMonitor()).getPoolMonitor();
             CostModule costModule = monitor.getCostModule();
@@ -102,7 +97,7 @@ public class InstanceData {
             return space;
 
         } catch (Exception e) {
-            LOGGER.error(e.toString());
+            LOGGER.error("Error in getStorage: " + e);
             return -1.0;
         }
     }
