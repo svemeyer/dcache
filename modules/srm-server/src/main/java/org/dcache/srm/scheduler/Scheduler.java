@@ -82,12 +82,15 @@ import java.util.Timer;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.dcache.srm.SRMAuthorizationException;
 import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMInternalErrorException;
 import org.dcache.srm.SRMInvalidRequestException;
 import org.dcache.srm.request.Job;
+import org.dcache.srm.request.JobStateChangeAware;
 import org.dcache.srm.scheduler.spi.SchedulingStrategy;
 import org.dcache.srm.scheduler.spi.SchedulingStrategyProvider;
 import org.dcache.srm.scheduler.spi.TransferStrategy;
@@ -99,7 +102,7 @@ import static com.google.common.base.Preconditions.*;
 import static com.google.common.base.Strings.padEnd;
 import static com.google.common.base.Strings.repeat;
 
-public class Scheduler <T extends Job>
+public class Scheduler <T extends Job> implements JobStateChangeAware
 {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(Scheduler.class);
@@ -109,6 +112,9 @@ public class Scheduler <T extends Job>
 
     // thread pool related variables
     private final ExecutorService pooledExecutor;
+
+    private final ScheduledExecutorService scheduler
+            = Executors.newSingleThreadScheduledExecutor();
 
     // ready state related variables
     private int maxReadyJobs;
@@ -197,11 +203,12 @@ public class Scheduler <T extends Job>
 
         workSupplyService.stopAsync().awaitTerminated();
         retryTimer.cancel();
+        scheduler.shutdownNow();
         pooledExecutor.shutdownNow();
     }
 
     /**
-     * Places a job in the queue.
+     * Places a newly created job in the queue.
      *
      * The job is moved to the QUEUED state. The job will be moved to the INPROGRESS state
      * in accordance with the scheduling strategy of this scheduler.
@@ -215,16 +222,64 @@ public class Scheduler <T extends Job>
         checkOwnership(job);
         LOGGER.trace("queue is called for job with id={} in state={}", job.getId(), job.getState());
 
+        acceptJob(job, "Queued.");
+    }
+
+
+    /**
+     * Accept a job after restarting the SRM.
+     *
+     * The job is moved to the QUEUED state. The job will be moved to the INPROGRESS state
+     * in accordance with the scheduling strategy of this scheduler.
+     *
+     * This action is subject to request limits and may cause the job to be failed
+     * immediately if the limits are exceeded.
+     * @param job the job loaded from the job storage.
+     */
+    public void inherit(Job job) throws IllegalStateTransition
+    {
+        State state = job.getState();
+
+        switch (state) {
+        // Unscheduled or queued jobs were never worked on before the SRM restart; we
+        // simply queue them now.
+        case UNSCHEDULED:
+        case QUEUED:
+        case INPROGRESS:
+            acceptJob(job, "Restored from database.");
+            break;
+
+        // Jobs in RQUEUED, READY or TRANSFERRING states require no further
+        // processing. We can leave them for the client to discover the TURL
+        // or place the job into the DONE state, respectively.
+        case RQUEUED:
+        case READY:
+        case TRANSFERRING:
+            // nothing to do, but keep track of state changes.
+            job.subscribe(this);
+            break;
+
+        default:
+            throw new RuntimeException("Unexpected state when restoring on startup: " + state);
+        }
+    }
+
+    private void acceptJob(Job job, String why) throws IllegalStateTransition
+    {
+        job.subscribe(this);
+
         job.wlock();
         try {
-            if (job.getState().isFinal()) {
-                throw new IllegalStateException("Cannot queue job in state " + job.getState());
-            } else if (threadQueue(job)) {
-                job.setState(State.QUEUED, "Queued.");
-            } else {
+            checkState(!job.getState().isFinal(), "Cannot accept job in state %s ",
+                    job.getState());
+
+            if (!threadQueue(job)) {
                 LOGGER.warn("Maximum request limit reached.");
                 job.setState(State.FAILED, "Site busy: Too many queued requests.");
+                return;
             }
+
+            job.setState(State.QUEUED, why);
         } finally {
             job.wunlock();
         }
@@ -238,6 +293,22 @@ public class Scheduler <T extends Job>
         checkState(running, "Scheduler is not running");
         checkOwnership(job);
         LOGGER.trace("execute is called for job with id={} in state={}", job.getId(), job.getState());
+        executeJob(job);
+    }
+
+    /**
+     * Schedule running this job after some delay.
+     */
+    public void schedule(Job job, long delay, TimeUnit units)
+    {
+        checkState(running, "Scheduler is not running");
+        checkOwnership(job);
+        LOGGER.trace("schedule called for job with id={} in state={}", job.getId(), job.getState());
+        scheduler.schedule(() -> executeJob(job), delay, units);
+    }
+
+    private void executeJob(Job job)
+    {
         pooledExecutor.execute(new JobWrapper(job));
     }
 
@@ -447,9 +518,10 @@ public class Scheduler <T extends Job>
         listeners.remove(listener);
     }
 
-    public void stateChanged(Job job, State oldState, State newState)
+    @Override
+    public void jobStateChanged(Job job, State oldState, String description)
     {
-        checkNotNull(job);
+        State newState = job.getState();
 
         synchronized (this) {
             jobs.remove(oldState, job.getId());

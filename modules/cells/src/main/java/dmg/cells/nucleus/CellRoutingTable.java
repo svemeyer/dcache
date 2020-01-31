@@ -198,7 +198,7 @@ public class CellRoutingTable implements Serializable
         }
     }
 
-    public CellRoute find(CellAddressCore addr, boolean allowRemote)
+    public CellRoute find(CellAddressCore addr, Optional<String> zone, boolean allowRemote)
     {
         String cellName = addr.getCellName();
         String domainName = addr.getCellDomainName();
@@ -222,6 +222,17 @@ public class CellRoutingTable implements Serializable
                             routes.stream().filter(r -> !r.getTarget().isDomainAddress()).toArray(CellRoute[]::new);
                     return (localRoutes.length > 0) ? localRoutes[random.nextInt(localRoutes.length)] : null;
                 } else if (!routes.isEmpty()) {
+
+                    if (zone.isPresent()) {
+                        CellRoute[] localRoutes = routes
+                                .stream()
+                                .filter(r -> r.getZone().equals(zone))
+                                .toArray(CellRoute[]::new);
+
+                        if (localRoutes.length > 0) {
+                            return localRoutes[random.nextInt(localRoutes.length)];
+                        }
+                    }
                     return routes.get(random.nextInt(routes.size()));
                 }
             }
@@ -234,7 +245,23 @@ public class CellRoutingTable implements Serializable
             }
         }
         synchronized (_default) {
-            return _default.isEmpty() ? null : _default.get(IntMath.mod(addr.hashCode(), _default.size()));
+
+            if (_default.isEmpty()) {
+                return null;
+            }
+
+            if (zone.isPresent()) {
+                Optional<CellRoute> defaultZonedRoute = _default
+                        .stream()
+                        .filter(r -> r.getZone().equals(zone))
+                        .findAny();
+
+                if (defaultZonedRoute.isPresent()) {
+                    return defaultZonedRoute.get();
+                }
+            }
+
+            return _default.get(IntMath.mod(addr.hashCode(), _default.size()));
         }
     }
 

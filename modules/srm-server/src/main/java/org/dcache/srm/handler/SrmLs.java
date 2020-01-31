@@ -74,7 +74,8 @@ public class SrmLs
         boolean longFormat = getFullDetailedList(request);
         URI[] surls = getSurls(request);
 
-        LsRequest r = new LsRequest(user,
+        LsRequest r = new LsRequest(srm.getSrmId(),
+                user,
                 surls,
                 TimeUnit.HOURS.toMillis(1),
                 configuration.getLsMaxPollPeriod(),
@@ -85,7 +86,7 @@ public class SrmLs
                 longFormat,
                 max_results_num);
         try (JDC ignored = r.applyJdc()) {
-            srm.schedule(r);
+            srm.acceptNewJob(r);
             return r.getSrmLsResponse(configuration.getLsSwitchToAsynchronousModeDelay());
         } catch (InterruptedException e) {
             throw new SRMInternalErrorException("Operation interrupted", e);

@@ -1,12 +1,10 @@
 package org.dcache.restful.util.namespace;
 
 import javax.servlet.http.HttpServletRequest;
-import javax.ws.rs.InternalServerErrorException;
 
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FileLocality;
 import diskCacheV111.util.PermissionDeniedCacheException;
-import diskCacheV111.util.RetentionPolicy;
 import diskCacheV111.vehicles.StorageInfo;
 
 import dmg.cells.nucleus.NoRouteToCellException;
@@ -14,37 +12,19 @@ import dmg.cells.nucleus.NoRouteToCellException;
 import org.dcache.cells.CellStub;
 import org.dcache.namespace.FileAttribute;
 import org.dcache.namespace.FileType;
-import org.dcache.pool.classic.ALRPReplicaStatePolicy;
-import org.dcache.pool.classic.ReplicaStatePolicy;
-import org.dcache.pool.repository.ReplicaState;
-import org.dcache.pool.repository.StickyRecord;
 import org.dcache.poolmanager.PoolMonitor;
+import org.dcache.qos.QoSTransitionEngine;
+import org.dcache.qos.QoSTransitionEngine.Qos;
+import org.dcache.qos.QoSTransitionEngine.QosStatus;
 import org.dcache.restful.providers.JsonFileAttributes;
-import org.dcache.restful.qos.QosManagement;
-import org.dcache.restful.qos.QosManagementNamespace;
 import org.dcache.restful.util.RequestUser;
 import org.dcache.vehicles.FileAttributes;
-
-import static org.dcache.restful.qos.QosManagement.QOS_PIN_REQUEST_ID;
 
 /**
  * <p>Utilities for obtaining and returning file attributes and qos
  *    information.</p>
  */
 public final class NamespaceUtils {
-
-    /*
-     * FIXME Here the code is assuming the pluggable behaviour of whichever
-     * pool a new file lands on.  Currently, pools have a hard-code policy
-     * factory (LFSReplicaStatePolicyFactory), which yields two possibilities:
-     * VolatileReplicaStatePolicy if lsf is "volatile" or "transient", or
-     * ALRPReplicaStatePolicy otherwise.
-     *
-     * In the following statement, we assume files always land on non-volatile
-     * pools.
-     */
-    private static final ReplicaStatePolicy POOL_POLICY = new ALRPReplicaStatePolicy();
-
     /**
      * <p>Add quality-of-service attributes (pinned, locality, etc.) </p>
      *
@@ -65,58 +45,13 @@ public final class NamespaceUtils {
             throw new PermissionDeniedCacheException("Permission denied");
         }
 
-        boolean isPinnedForQoS = QosManagementNamespace.isPinnedForQoS(attributes,
-                                                                       pinmanager);
+        QosStatus status = new QoSTransitionEngine(poolMonitor, pinmanager)
+                        .getQosStatus(attributes, request.getRemoteHost());
 
-        FileLocality locality = poolMonitor.getFileLocality(attributes,
-                                                        request.getRemoteHost());
-        switch (locality) {
-            case NEARLINE:
-                json.setCurrentQos(QosManagement.TAPE);
-                if (isPinnedForQoS) {
-                    json.setTargetQos(QosManagement.DISK_TAPE);
-                }
-                break;
-
-            case ONLINE:
-                json.setCurrentQos(QosManagement.DISK);
-                if (attributes.isDefined(FileAttribute.RETENTION_POLICY)
-                        && attributes.getRetentionPolicy() == RetentionPolicy.CUSTODIAL) {
-                    json.setTargetQos(QosManagement.TAPE);
-                }
-                break;
-
-            case ONLINE_AND_NEARLINE:
-                json.setCurrentQos(isPinnedForQoS ? QosManagement.DISK_TAPE :
-                                              QosManagement.TAPE);
-                break;
-
-            case NONE: // NONE implies the target is a directory.
-                json.setCurrentQos(directoryQoS(attributes));
-                break;
-
-            case UNAVAILABLE:
-                json.setCurrentQos(QosManagement.UNAVAILABLE);
-                break;
-
-            // LOST is currently not used by dCache
-            case LOST:
-            default:
-                // error cases
-                throw new InternalServerErrorException(
-                                "Unexpected file locality: " + locality);
-        }
-    }
-
-    private static String directoryQoS(FileAttributes attributes)
-    {
-        ReplicaState state = POOL_POLICY.getTargetState(attributes);
-        boolean isSticky = POOL_POLICY.getStickyRecords(attributes).stream()
-                .anyMatch(StickyRecord::isNonExpiring);
-        if (state == ReplicaState.PRECIOUS) {
-            return isSticky ? QosManagement.DISK_TAPE : QosManagement.TAPE;
-        } else {
-            return isSticky ? QosManagement.DISK : QosManagement.VOLATILE;
+        json.setCurrentQos(status.getCurrent().displayName());
+        Qos target = status.getTarget();
+        if (target != null){
+            json.setTargetQos(target.displayName());
         }
     }
 
@@ -131,7 +66,7 @@ public final class NamespaceUtils {
      * @param isLocations         add locations if true
      * @param isOptional          add optional attributes if true
      * @param request             to check for client info
-     * @param ctx                 for access to remote PoolMonitor
+     * @param poolMonitor         for access to remote PoolMonitor
      */
     public static void chimeraToJsonAttributes(String name,
                                                JsonFileAttributes json,

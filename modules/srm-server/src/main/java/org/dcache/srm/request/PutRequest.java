@@ -119,21 +119,15 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     private final String[] protocols;
     private TOverwriteMode overwriteMode;
 
-    public PutRequest(SRMUser user,
-        URI[] surls,
-        Long[] sizes,
-        boolean[] wantPermanent,
-        String[] protocols,
-        long lifetime,
-        long max_update_period,
-        String client_host,
-        @Nullable String spaceToken,
-        @Nullable TRetentionPolicy retentionPolicy,
-        @Nullable TAccessLatency accessLatency,
-        @Nullable String description)
+    public PutRequest(@Nonnull String srmId, SRMUser user, URI[] surls,
+            Long[] sizes, boolean[] wantPermanent, String[] protocols,
+            long lifetime, long max_update_period, String client_host,
+            @Nullable String spaceToken,
+            @Nullable TRetentionPolicy retentionPolicy,
+            @Nullable TAccessLatency accessLatency,
+            @Nullable String description)
     {
-
-        super(user, max_update_period, lifetime, description, client_host,
+        super(srmId, user, max_update_period, lifetime, description, client_host,
               id -> {
                   checkArgument(surls.length == sizes.length);
                   ImmutableList.Builder<PutFileRequest> requests = ImmutableList.builder();
@@ -146,45 +140,20 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
         this.protocols = Arrays.copyOf(protocols, protocols.length);
     }
 
-    public  PutRequest(
-    long id,
-    Long nextJobId,
-    long creationTime,
-    long lifetime,
-    int stateId,
-    SRMUser user,
-    String scheduelerId,
-    long schedulerTimeStamp,
-    int numberOfRetries,
-    long lastStateTransitionTime,
-    JobHistory[] jobHistoryArray,
-    ImmutableList<PutFileRequest> fileRequests,
-    int retryDeltaTime,
-    boolean should_updateretryDeltaTime,
-    String description,
-    String client_host,
-    String statusCodeString,
-    List<String> protocols
-    ) {
-        super( id,
-        nextJobId,
-        creationTime,
-        lifetime,
-        stateId,
-        user,
-        scheduelerId,
-        schedulerTimeStamp,
-        numberOfRetries,
-        lastStateTransitionTime,
-        jobHistoryArray,
-        fileRequests,
-        retryDeltaTime,
-        should_updateretryDeltaTime,
-        description,
-        client_host,
-        statusCodeString);
+    public PutRequest(@Nonnull String srmId, long id, Long nextJobId,
+            long creationTime, long lifetime, int stateId, SRMUser user,
+            String scheduelerId, long schedulerTimeStamp, int numberOfRetries,
+            long lastStateTransitionTime, JobHistory[] jobHistoryArray,
+            ImmutableList<PutFileRequest> fileRequests, int retryDeltaTime,
+            boolean should_updateretryDeltaTime, String description,
+            String client_host, String statusCodeString, List<String> protocols)
+    {
+        super(srmId, id, nextJobId, creationTime, lifetime, stateId, user, scheduelerId,
+                schedulerTimeStamp, numberOfRetries, lastStateTransitionTime,
+                jobHistoryArray, fileRequests, retryDeltaTime,
+                should_updateretryDeltaTime, description, client_host,
+                statusCodeString);
         this.protocols = protocols.toArray(new String[protocols.size()]);
-
     }
 
     @Nonnull
@@ -206,8 +175,7 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public void scheduleWith(Scheduler scheduler) throws InterruptedException,
-            IllegalStateTransition
+    public void scheduleWith(Scheduler scheduler) throws IllegalStateTransition
     {
         // save this request in request storage unconditionally
         // file requests will get stored as soon as they are
@@ -299,19 +267,17 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    protected void stateChanged(State oldState) {
-        State state = getState();
-        if(state.isFinal()) {
-
-            LOGGER.debug("put request state changed to {}", state);
+    protected void processStateChange(State newState, String description)
+    {
+        if (newState.isFinal()) {
+            LOGGER.debug("put request state changed to {}", newState);
             for (PutFileRequest request : getFileRequests()) {
                 request.wlock();
                 try {
                     State fr_state = request.getState();
-                    if(!fr_state.isFinal())
-                    {
-                        LOGGER.debug("changing fr#{} to {}", request.getId(), state);
-                        request.setState(state, "Changing file state because request state has changed.");
+                    if (!fr_state.isFinal()) {
+                        LOGGER.debug("changing fr#{} to {}", request.getId(), newState);
+                        request.setState(newState, "Request changed: " + description);
                     }
                 } catch (IllegalStateTransition ist) {
                     LOGGER.error(ist.getMessage());
@@ -319,9 +285,9 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
                     request.wunlock();
                 }
             }
-
         }
 
+        super.processStateChange(newState, description);
     }
 
     /**
@@ -438,11 +404,11 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public TRequestType getRequestType() {
+    protected TRequestType getRequestType() {
         return TRequestType.PREPARE_TO_PUT;
     }
 
-    public TOverwriteMode getOverwriteMode() {
+    private TOverwriteMode getOverwriteMode() {
         rlock();
         try {
             return overwriteMode;
@@ -460,7 +426,7 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
         }
     }
 
-    public final boolean isOverwrite() {
+    protected final boolean isOverwrite() {
         if(getConfiguration().isOverwrite()) {
             TOverwriteMode mode = getOverwriteMode();
             if(mode == null) {
@@ -489,7 +455,7 @@ public final class PutRequest extends ContainerRequest<PutFileRequest> {
     }
 
     @Override
-    public String getNameForRequestType() {
+    protected String getNameForRequestType() {
         return "Put";
     }
 }

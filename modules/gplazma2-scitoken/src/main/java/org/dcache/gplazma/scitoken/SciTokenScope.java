@@ -1,6 +1,6 @@
 /* dCache - http://www.dcache.org/
  *
- * Copyright (C) 2019 Deutsches Elektronen-Synchrotron
+ * Copyright (C) 2019-2020 Deutsches Elektronen-Synchrotron
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -17,37 +17,52 @@
  */
 package org.dcache.gplazma.scitoken;
 
-import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
-import java.util.List;
+import java.util.EnumSet;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.Objects;
+import java.util.Optional;
 
-import static org.dcache.util.Exceptions.genericCheck;
+import diskCacheV111.util.FsPath;
+
+import org.dcache.auth.attributes.Activity;
+import org.dcache.auth.attributes.MultiTargetedRestriction.Authorisation;
+
+import static java.util.Arrays.asList;
+import static java.util.Objects.requireNonNull;
+import static org.dcache.auth.attributes.Activity.*;
+import static org.dcache.gplazma.scitoken.InvalidScopeException.checkScopeValid;
 
 /**
  * A Scope represents one of the space-separated list of allowed operations
  * contained within the SciToken "scope" claim.
  */
-public class SciTokenScope
+public class SciTokenScope implements AuthorisationSupplier
 {
-    public static class InvalidScopeException extends RuntimeException
-    {
-        public InvalidScopeException(String message)
-        {
-            super(message);
-        }
-    }
-
     public enum Operation
     {
-        READ, WRITE, QUEUE, EXECUTE
+        READ(LIST, READ_METADATA, DOWNLOAD),
+        WRITE(LIST, READ_METADATA, UPLOAD, MANAGE, DELETE, UPDATE_METADATA),
+        QUEUE,
+        EXECUTE;
+
+        private final EnumSet<Activity> allowedActivities;
+
+        private Operation(Activity... allowedActivities)
+        {
+            this.allowedActivities = allowedActivities.length == 0
+                    ? EnumSet.noneOf(Activity.class)
+                    : EnumSet.copyOf(asList(allowedActivities));
+        }
     }
 
     private static final String SCITOKEN_SCOPE_PREFIX = "https://scitokens.org/v1/authz/";
     private static final Map<String,Operation> OPERATIONS_BY_LABEL;
+    private static final Logger LOGGER = LoggerFactory.getLogger(SciTokenScope.class);
 
     static {
         ImmutableMap.Builder<String,Operation> builder = ImmutableMap.builder();
@@ -58,55 +73,77 @@ public class SciTokenScope
     private final Operation operation;
     private final String path;
 
-    private SciTokenScope(String scope) throws InvalidScopeException
+    SciTokenScope(Operation operation, String path)
     {
-        int colon = scope.indexOf(':');
+        this.operation = requireNonNull(operation);
+        this.path = requireNonNull(path);
+        LOGGER.debug("SciTokenScope created: op={} path={}", operation, path);
+    }
 
-        String operationLabel = colon == -1 ? scope : scope.substring(0, colon);
-        String normalisedOperation = operationLabel.startsWith(SCITOKEN_SCOPE_PREFIX)
-                ? operationLabel.substring(SCITOKEN_SCOPE_PREFIX.length()) : operationLabel;
-        operation = OPERATIONS_BY_LABEL.get(normalisedOperation);
+    public SciTokenScope(String scope) throws InvalidScopeException
+    {
+        String withoutPrefix = withoutPrefix(scope);
+
+        int colon = withoutPrefix.indexOf(':');
+
+        String operationLabel = colon == -1 ? withoutPrefix : withoutPrefix.substring(0, colon);
+        operation = OPERATIONS_BY_LABEL.get(operationLabel);
         checkScopeValid(operation != null, "Unknown operation %s", operationLabel);
 
         if (colon == -1) {
             path = "/";
         } else {
-            path = scope.substring(colon+1);
+            path = withoutPrefix.substring(colon+1);
             checkScopeValid(path.startsWith("/"), "Path does not start with /");
         }
+
+        LOGGER.debug("SciTokenScope created from scope \"{}\": op={} path={}",
+                scope, operation, path);
     }
 
-    private static void checkScopeValid(boolean isOK, String format, Object... arguments)
+    public static boolean isSciTokenScope(String scope)
     {
-        genericCheck(isOK, InvalidScopeException::new, format, arguments);
+        String withoutPrefix = withoutPrefix(scope);
+        int colon = withoutPrefix.indexOf(':');
+        String operation = colon == -1 ? withoutPrefix : withoutPrefix.substring(0, colon);
+
+        return (colon == -1 || withoutPrefix.substring(colon+1).startsWith("/"))
+                && OPERATIONS_BY_LABEL.keySet().contains(operation);
     }
 
-    /**
-     * Parse the "scope" claim and extract all SciToken scopes.
-     */
-    public static List<SciTokenScope> parseScope(String claim) throws InvalidScopeException
+    private static String withoutPrefix(String scope)
     {
-        return Splitter.on(' ').trimResults().splitToList(claim).stream()
-                .filter(SciTokenScope::isSciTokenScope)
-                .map(SciTokenScope::new)
-                .collect(Collectors.toList());
+        return scope.startsWith(SCITOKEN_SCOPE_PREFIX)
+                ? scope.substring(SCITOKEN_SCOPE_PREFIX.length()) : scope;
     }
 
-    private static boolean isSciTokenScope(String scope)
+    @Override
+    public Optional<Authorisation> authorisation(FsPath prefix)
     {
-        int colon = scope.indexOf(':');
-        String operation = colon == -1 ? scope : scope.substring(0, colon);
-        return operation.startsWith(SCITOKEN_SCOPE_PREFIX) ||
-                OPERATIONS_BY_LABEL.keySet().contains(operation);
+        FsPath absPath = prefix.resolve(path.substring(1));
+        LOGGER.debug("SciTokenScope authorising {} with prefix \"{}\" to path {}",
+                operation.allowedActivities, prefix, absPath);
+        return operation.allowedActivities.isEmpty()
+                ? Optional.empty()
+                : Optional.of(new Authorisation(operation.allowedActivities, absPath));
     }
 
-    public Operation getOperation()
+    @Override
+    public boolean equals(Object other)
     {
-        return operation;
+        if (!(other instanceof SciTokenScope)) {
+            return false;
+        }
+
+        SciTokenScope otherScope = (SciTokenScope) other;
+        return otherScope.operation == operation && otherScope.path.equals(path);
     }
 
-    public String getPath()
-    {
-        return path;
+    @Override
+    public int hashCode() {
+        int hash = 5;
+        hash = 97 * hash + Objects.hashCode(operation);
+        hash = 97 * hash + Objects.hashCode(path);
+        return hash;
     }
 }

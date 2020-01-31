@@ -1,8 +1,9 @@
 package org.dcache.gplazma.plugins;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
 import com.google.common.net.InetAddresses;
-import eu.emi.security.authn.x509.impl.OpensslNameUtils;
+import com.google.common.net.InternetDomainName;
 import eu.emi.security.authn.x509.proxy.ProxyChainInfo;
 import eu.emi.security.authn.x509.proxy.ProxyUtils;
 import org.bouncycastle.asn1.ASN1Encodable;
@@ -15,8 +16,6 @@ import org.globus.gsi.gssapi.jaas.GlobusPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.security.auth.x500.X500Principal;
-
 import java.io.IOException;
 import java.net.InetAddress;
 import java.security.Principal;
@@ -25,6 +24,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -35,6 +35,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.dcache.auth.EmailAddressPrincipal;
@@ -67,6 +70,7 @@ public class X509Plugin implements GPlazmaAuthenticationPlugin
     private static final Logger LOG = LoggerFactory.getLogger(X509Plugin.class);
     private static final String OID_CERTIFICATE_POLICIES = "2.5.29.32";
     private static final String OID_ANY_POLICY = "2.5.29.32";
+    private static final String OID_EKU_TLS_SERVER = "1.3.6.1.5.5.7.3.1";
     private static final DERSequence ANY_POLICY = new DERSequence(new ASN1ObjectIdentifier(OID_ANY_POLICY));
     private static final Map<String,LoA> LOA_POLICIES = ImmutableMap.<String,LoA>builder()
             /*
@@ -90,12 +94,26 @@ public class X509Plugin implements GPlazmaAuthenticationPlugin
             .put("1.2.840.113612.5.2.2.6", IGTF_AP_IOTA)
             .build();
 
+    private static final int SHORTEST_LOA_POLICY_OID = LOA_POLICIES.keySet().stream()
+            .mapToInt(String::length)
+            .min().orElse(0);
+
     private static final Map<String,EntityDefinition> ENTITY_DEFINITION_POLICIES
             = ImmutableMap.<String,EntityDefinition>builder()
             .put("1.2.840.113612.5.2.3.3.1", ROBOT)
             .put("1.2.840.113612.5.2.3.3.2", HOST)
             .put("1.2.840.113612.5.2.3.3.3", PERSON)
             .build();
+
+    private static final Set<LoA> IGTF_AP = EnumSet.of(IGTF_AP_CLASSIC,
+            IGTF_AP_SGCS, IGTF_AP_SLCS, IGTF_AP_EXPERIMENTAL, IGTF_AP_MICS,
+            IGTF_AP_IOTA);
+
+    private static final Set<LoA> IGTF_LOA = EnumSet.of(IGTF_LOA_ASPEN,
+            IGTF_LOA_BIRCH, IGTF_LOA_CEDAR, IGTF_LOA_DOGWOOD);
+
+    private static final Pattern ROBOT_CN_PATTERN = Pattern.compile("/CN=[rR]obot[^/\\p{Alnum}]");
+    private static final Pattern CN_PATTERN = Pattern.compile("/CN=([^/]*)");
 
     private final IGTFInfoDirectory infoDirectory;
 
@@ -141,11 +159,6 @@ public class X509Plugin implements GPlazmaAuthenticationPlugin
 
                     identifiedPrincipals.addAll(identifyPrincipalsFromEEC(eec));
 
-                    // REVISIT: this assumes that issuer of EEC is the CA.  This
-                    //          is currently true for all IGTF CAs.
-                    X500Principal ca = eec.getIssuerX500Principal();
-                    identifiedPrincipals.addAll(identifyPrincipalsFromCA(ca));
-
                     found = true;
                 }
             } catch (IOException | CertificateException e) {
@@ -158,38 +171,191 @@ public class X509Plugin implements GPlazmaAuthenticationPlugin
     private List<Principal> identifyPrincipalsFromEEC(X509Certificate eec)
             throws AuthenticationException, CertificateParsingException
     {
+        Set<Principal> caPrincipals = identifyPrincipalsFromIssuer(eec);
+
+        List<String> policies = listPolicies(eec);
+
+        List<Principal> loaPrincipals = policies.stream()
+                .flatMap(X509Plugin::loaPrincipals)
+                .collect(Collectors.toList());
+
+        Collection<List<?>> san = listSubjectAlternativeNames(eec);
+
+        List<Principal> emailPrincipals = subjectAlternativeNamesWithTag(san, GeneralName.rfc822Name)
+                .filter(EmailAddressPrincipal::isValid)
+                .map(EmailAddressPrincipal::new)
+                .collect(Collectors.toList());
+
+        Principal subject = new GlobusPrincipal(eec.getSubjectX500Principal());
+
+        Optional<EntityDefinition> entity = identifyEntityDefinition(eec, policies,
+                subject, san);
+
         List<Principal> principals = new ArrayList<>();
+        principals.addAll(caPrincipals);
+        principals.addAll(loaPrincipals);
 
-        principals.add(asGlobusPrincipal(eec.getSubjectX500Principal()));
+        principals = filterOutErroneousLoAs(subject, principals);
+        addImpliedLoA(entity, principals);
 
-        listPolicies(eec).stream()
-                .map(PolicyInformation::getInstance)
-                .map(PolicyInformation::getPolicyIdentifier)
-                .map(ASN1ObjectIdentifier::getId)
-                .flatMap(X509Plugin::asPrincipal)
-                .forEach(principals::add);
-
-        listSubjectAlternativeNames(eec).stream()
-                .map(X509Plugin::asPrincipal)
-                .filter(Objects::nonNull)
-                .forEach(principals::add);
+        principals.add(subject);
+        principals.addAll(emailPrincipals);
+        entity.map(EntityDefinitionPrincipal::new).ifPresent(principals::add);
 
         return principals;
     }
 
-    private Set<Principal> identifyPrincipalsFromCA(X500Principal ca)
+    private List<Principal> filterOutErroneousLoAs(Principal subject, List<Principal> principals)
     {
-        return infoDirectory == null
-                ? Collections.emptySet()
-                : infoDirectory.getPrincipals(asGlobusPrincipal(ca));
+        EnumSet<LoA> assertedLoAs = assertedLoAs(principals);
+
+        EnumSet<LoA> assertedIgtfAp = EnumSet.copyOf(assertedLoAs);
+        assertedIgtfAp.retainAll(IGTF_AP);
+
+        Optional<Stream<Principal>> filteredPrincipals = Optional.empty();
+        if (assertedIgtfAp.size() > 1) {
+            LOG.warn("Suppressing IGTF AP principals for \"{}\" as an incompatible"
+                    + " set is asserted: {}", subject.getName(), assertedIgtfAp);
+            filteredPrincipals = Optional.of(principals.stream().filter(p -> !(p instanceof LoAPrincipal && IGTF_AP.contains(((LoAPrincipal)p).getLoA()))));
+        }
+
+        EnumSet<LoA> assertedIgtfLoAs = EnumSet.copyOf(assertedLoAs);
+        assertedIgtfLoAs.retainAll(IGTF_LOA);
+
+        if (assertedIgtfLoAs.size() > 1) {
+            LOG.warn("Suppressing IGTF LoA principals for \"{}\" as an incompatible"
+                    + " set is asserted: {}", subject.getName(), assertedIgtfLoAs);
+            filteredPrincipals = Optional.of(filteredPrincipals.orElse(principals.stream())
+                    .filter(p -> !(p instanceof LoAPrincipal && IGTF_LOA.contains(((LoAPrincipal)p).getLoA()))));
+        }
+
+        return filteredPrincipals.map(s -> s.collect(Collectors.toList())).orElse(principals);
     }
 
-    private GlobusPrincipal asGlobusPrincipal(X500Principal p)
+    private static EnumSet<LoA> assertedLoAs(Collection<Principal> principals)
     {
-        return new GlobusPrincipal(OpensslNameUtils.convertFromRfc2253(p.getName(), true));
+        return principals.stream().filter(LoAPrincipal.class::isInstance)
+                .map(LoAPrincipal.class::cast)
+                .map(LoAPrincipal::getLoA)
+                .collect(Collectors.toCollection(() -> EnumSet.noneOf(LoA.class)));
     }
 
-    private List<ASN1Encodable> listPolicies(X509Certificate eec)
+    private Optional<EntityDefinition> identifyEntityDefinition(X509Certificate eec,
+            List<String> policies, Principal subject, Collection<List<?>> san)
+            throws CertificateParsingException
+    {
+        Set<EntityDefinition> assertedEntityDefn = policies.stream()
+                .map(ENTITY_DEFINITION_POLICIES::get)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(() -> EnumSet.noneOf(EntityDefinition.class)));
+
+        if (assertedEntityDefn.size() == 1) {
+            EntityDefinition entity = assertedEntityDefn.iterator().next();
+            return Optional.of(entity);
+        }
+
+        if (assertedEntityDefn.size() > 1) {
+            LOG.warn("Multiple EntityTypes asserted: {}", assertedEntityDefn);
+            return Optional.empty();
+        }
+
+        // No entity asserted as a policy, let's try to guess...
+
+        return guessEntityDefinition(eec, subject.getName(), san);
+
+    }
+
+    /** Use heuristics to guess what kind of entity this certificate represents. */
+    private Optional<EntityDefinition> guessEntityDefinition(X509Certificate eec,
+            String subject, Collection<List<?>> san) throws CertificateParsingException
+    {
+        if (ROBOT_CN_PATTERN.matcher(subject).find()) {
+            return Optional.of(ROBOT);
+        }
+
+        List<String> eku = eec.getExtendedKeyUsage();
+        if (eku != null && eku.stream().anyMatch(OID_EKU_TLS_SERVER::equals)
+                && (hasSubjectAlternativeNameOfType(san, GeneralName.dNSName)
+                || hasCnWithFqdn(subject))) {
+            return Optional.of(HOST);
+        }
+
+        /*
+         *  Unfortunately there is no good heuristic we can use to determine if
+         *  the certificate is a "natural person" (PERSON).  Examples of CNs
+         *  issued by CAs:
+         *
+         *      /CN=Alexander Paul Millar
+         *      /CN=victor.mendez
+         *      /CN=Jesus-Cruz-Guzman
+         *      /CN=Jose.Luis.Garza.Rivera
+         *
+         *  In addition, some CAs append numbers or email addresses to the
+         *  person's name in an effort to ensure the CN is unique.
+         *
+         *  Further, although some (but not all) CAs include an email address
+         *  as a SubjectAlternativeName, some CAs include an email address as
+         *  a SubjectAlternativeName in HOST certificates.
+         *
+         *  Perhaps the best we can do is require that a PERSON certificate has
+         *  no DNS, IP-address or URI SujectAlternativeName entry, and that we
+         *  haven't already identified the entity as a ROBOT or a HOST.
+         */
+
+        if (!hasSubjectAlternativeNameOfType(san, GeneralName.dNSName,
+                GeneralName.iPAddress, GeneralName.uniformResourceIdentifier)) {
+            return Optional.of(PERSON);
+        }
+
+        return Optional.empty();
+    }
+
+    private static boolean hasSubjectAlternativeNameOfType(Collection<List<?>> san,
+            int... tags)
+    {
+        return san.stream()
+                .mapToInt(n -> ((Integer) n.get(0)))
+                .anyMatch(t -> Arrays.stream(tags).anyMatch(t2 -> t2 == t));
+    }
+
+    private static Stream<String> subjectAlternativeNamesWithTag(Collection<List<?>> san,
+            int tag)
+    {
+        return san.stream()
+                .filter(n -> ((Integer) n.get(0)) == tag)
+                .map(n -> n.get(1))
+                .filter(Objects::nonNull)
+                .map(String::valueOf);
+    }
+
+    private static boolean hasCnWithFqdn(String subject)
+    {
+        Matcher cnMatcher = CN_PATTERN.matcher(subject);
+        while (cnMatcher.find()) {
+            String cnValue = cnMatcher.group(1);
+            if (InternetDomainName.isValid(cnValue)
+                    && InternetDomainName.from(cnValue).hasPublicSuffix()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    private Set<Principal> identifyPrincipalsFromIssuer(X509Certificate eec)
+    {
+        if (infoDirectory == null) {
+            return Collections.emptySet();
+        }
+
+        // REVISIT: this assumes that issuer of EEC is the CA.  This
+        //          is currently true for all IGTF CAs.
+        GlobusPrincipal issuer = new GlobusPrincipal(eec.getIssuerX500Principal());
+
+        return infoDirectory.getPrincipals(issuer);
+    }
+
+    private List<String> listPolicies(X509Certificate eec)
             throws AuthenticationException
     {
         byte[] encoded;
@@ -205,62 +371,62 @@ public class X509Plugin implements GPlazmaAuthenticationPlugin
             return Collections.emptyList();
         }
 
-        Enumeration<ASN1Encodable> policySource = ASN1Sequence.getInstance(encoded).getObjects();
-        List<ASN1Encodable> policies = new ArrayList<>();
-        while (policySource.hasMoreElements()) {
-            ASN1Encodable policy = policySource.nextElement();
-            if (!policy.equals(ANY_POLICY)) {
-                policies.add(policy);
+        Enumeration<ASN1Encodable> asn1EncodedPolicies = ASN1Sequence.getInstance(encoded).getObjects();
+        List<String> policies = new ArrayList<>();
+        while (asn1EncodedPolicies.hasMoreElements()) {
+            ASN1Encodable asn1EncodedPolicy = asn1EncodedPolicies.nextElement();
+            if (asn1EncodedPolicy.equals(ANY_POLICY)) {
+                continue;
             }
+            PolicyInformation policy = PolicyInformation.getInstance(asn1EncodedPolicy);
+            policies.add(policy.getPolicyIdentifier().getId());
         }
         return policies;
+
     }
 
-    private Collection<List<?>> listSubjectAlternativeNames(X509Certificate certificate)
+    private static Collection<List<?>> listSubjectAlternativeNames(X509Certificate certificate)
             throws CertificateParsingException
     {
         Collection<List<?>> names = certificate.getSubjectAlternativeNames();
         return names == null ? Collections.emptyList() : names;
     }
 
-    private static Principal asPrincipal(List<?> name)
+    /** A stream of LoA principals obtained directly from a policy OID. */
+    private static Stream<LoAPrincipal> loaPrincipals(String oid)
     {
-        int tag = (Integer) name.get(0);
-        Object object = name.get(1);
-
-        switch (tag) {
-        case GeneralName.rfc822Name:
-            if (object == null) {
-                LOG.debug("Certificate has SubjectAlternativeName with missing email address");
-                break;
-            }
-
-            String address = String.valueOf(object);
-            if (EmailAddressPrincipal.isValid(address)) {
-                return new EmailAddressPrincipal(address);
-            } else {
-                LOG.debug("Certificate has SubjectAlternativeName with invalid email address '{}'",
-                        address);
-            }
-            break;
-        }
-
-        return null;
+        Optional<LoAPrincipal> principal = loaFromOid(oid).map(LoAPrincipal::new);
+        return Streams.stream(principal);
     }
 
-
-    private static Stream<? extends Principal> asPrincipal(String oid)
+    private static Optional<LoA> loaFromOid(String oid)
     {
         LoA loa = LOA_POLICIES.get(oid);
-
-        if (loa != null) {
-            return LoAs.withImpliedLoA(EnumSet.of(loa)).stream()
-                    .map(LoAPrincipal::new);
+        if (loa == null) {
+            /*
+             * Some CAs assert the version-specific OID; e.g.,
+             * when asserting IGTF_AP_IOTA, the CA adds
+             * 1.2.840.113612.5.2.2.6.1 for version 1 of the document, rather
+             * than the more generic 1.2.840.113612.5.2.2.6.
+             */
+            int lastDot = oid.lastIndexOf('.');
+            if (lastDot >= SHORTEST_LOA_POLICY_OID) {
+                String oidWithoutLastDot = oid.substring(0, lastDot);
+                loa = LOA_POLICIES.get(oidWithoutLastDot);
+            }
         }
+        return Optional.ofNullable(loa);
+    }
 
-        return Optional.ofNullable(ENTITY_DEFINITION_POLICIES.get(oid))
-            .map(EntityDefinitionPrincipal::new)
-            .map(Stream::of)
-            .orElse(Stream.empty());
+    /** Add all implied LoAs, given the LoA assertions so far. */
+    private static void addImpliedLoA(Optional<EntityDefinition> entity,
+            Collection<Principal> principals)
+    {
+        EnumSet<LoA> assertedLoAs = assertedLoAs(principals);
+
+        LoAs.withImpliedLoA(entity, assertedLoAs).stream()
+                .filter(l -> !assertedLoAs.contains(l))
+                .map(LoAPrincipal::new)
+                .forEach(principals::add);
     }
 }

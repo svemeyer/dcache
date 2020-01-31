@@ -109,6 +109,7 @@ public class SrmCopy implements CredentialAwareHandler
         ImmutableMap<String,String> extraInfo = getExtraInfo(request);
         credential.acceptAlternative(extraInfo.get("credential"));
         CopyRequest r = new CopyRequest(
+                srm.getSrmId(),
                 user,
                 credential.getId(),
                 from_urls,
@@ -124,10 +125,8 @@ public class SrmCopy implements CredentialAwareHandler
                 overwriteMode,
                 extraInfo);
         try (JDC ignored = r.applyJdc()) {
-            srm.schedule(r);
+            srm.acceptNewJob(r);
             return r.getSrmCopyResponse();
-        } catch (InterruptedException e) {
-            throw new SRMInternalErrorException("Operation interrupted", e);
         } catch (IllegalStateTransition e) {
             throw new SRMInternalErrorException("Scheduling failure", e);
         }

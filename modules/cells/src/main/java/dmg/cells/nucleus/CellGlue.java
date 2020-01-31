@@ -6,9 +6,6 @@ import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.state.ConnectionState;
-import org.apache.zookeeper.WatchedEvent;
-import org.apache.zookeeper.ZooKeeper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +37,6 @@ class CellGlue
 {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(CellGlue.class);
-    private static final Logger EVENT_LOGGER = LoggerFactory.getLogger("org.dcache.zookeeper");
 
     private final String _cellDomainName;
     private final ConcurrentMap<String, CellNucleus> _cellList = new ConcurrentHashMap<>();
@@ -60,10 +56,12 @@ class CellGlue
     private final CellAddressCore _domainAddress;
     private final CuratorFramework _curatorFramework;
     private final Optional<String> _zone;
+    private final SerializationHandler.Serializer _serializer;
 
     CellGlue(String cellDomainName, @Nonnull CuratorFramework curatorFramework,
-            Optional<String> zone)
+            Optional<String> zone, SerializationHandler.Serializer serializer)
     {
+        _serializer = serializer;
         _zone = requireNonNull(zone);
         String cellDomainNameLocal = cellDomainName;
 
@@ -77,7 +75,7 @@ class CellGlue
                     System.currentTimeMillis();
         }
         _cellDomainName = cellDomainNameLocal;
-        _curatorFramework = withMonitoring(curatorFramework);
+        _curatorFramework = curatorFramework;
         _domainAddress = new CellAddressCore("*", _cellDomainName);
         _masterThreadGroup = new ThreadGroup("Master-Thread-Group");
         _killerThreadGroup = new ThreadGroup("Killer-Thread-Group");
@@ -95,37 +93,6 @@ class CellGlue
                                        killerThreadFactory);
         emergencyKillerExecutor.prestartCoreThread();
         _emergencyKillerExecutor = MoreExecutors.listeningDecorator(emergencyKillerExecutor);
-    }
-
-    private static CuratorFramework withMonitoring(CuratorFramework curator)
-    {
-        curator.getConnectionStateListenable().addListener((c,s) -> {
-                    EVENT_LOGGER.info("[CURATOR: {}] connection state now {}",
-                            c.getState(), s);
-
-                    if (s == ConnectionState.CONNECTED) {
-                        try {
-                            ZooKeeper zk = c.getZookeeperClient().getZooKeeper();
-                            zk.register((WatchedEvent event) -> {
-                                        EVENT_LOGGER.info("[ZOOKEEPER] event "
-                                                + "type={}, state={}, path={}",
-                                                event.getType(), event.getState(),
-                                                event.getPath());
-                                    });
-                        } catch (Exception e) {
-                            EVENT_LOGGER.error("Failed to register ZK logging", e);
-                        }
-                    }
-                });
-        curator.getCuratorListenable().addListener((c,e) ->
-                    EVENT_LOGGER.info("[CURATOR: {}] event: type={}, name={}, "
-                            + "path={}, rc={}, children={}",
-                            c.getState(), e.getType(), e.getName(), e.getPath(),
-                            e.getResultCode(), e.getChildren()));
-        curator.getUnhandledErrorListenable().addListener((m,e) ->
-                    EVENT_LOGGER.warn("[CURATOR: {}] unhandled error \"{}\": {}",
-                            curator.getState(), m, e.getMessage()));
-        return curator;
     }
 
     static Thread newThread(ThreadGroup threadGroup, Runnable r)
@@ -197,12 +164,12 @@ class CellGlue
 
     void consume(CellNucleus cell, String queue)
     {
-        routeAdd(new CellRoute(queue, cell.getThisAddress(), CellRoute.QUEUE));
+        routeAdd(new CellRoute(queue, cell.getThisAddress(), cell.getZone(), CellRoute.QUEUE));
     }
 
     void subscribe(CellNucleus cell, String topic)
     {
-        routeAdd(new CellRoute(topic, cell.getThisAddress(), CellRoute.TOPIC));
+        routeAdd(new CellRoute(topic, cell.getThisAddress(), cell.getZone(), CellRoute.TOPIC));
     }
 
     Map<String, Object> getCellContext()
@@ -214,6 +181,11 @@ class CellGlue
     Optional<String> getZone()
     {
         return _zone;
+    }
+
+    SerializationHandler.Serializer getMessageSerializer()
+    {
+        return _serializer;
     }
 
     Object getCellContext(String str)
@@ -499,7 +471,7 @@ class CellGlue
             throws SerializationException
     {
         if (!msg.isStreamMode()) {
-            msg = msg.encode();
+            msg = msg.encodeWith(_serializer);
         }
         CellPath destination = msg.getDestinationPath();
         LOGGER.trace("sendMessage : {} send to {}", msg.getUOID(), destination);
@@ -583,7 +555,7 @@ class CellGlue
 
             /* Lookup a route.
              */
-            CellRoute route = _routingTable.find(address, resolveRemotely);
+            CellRoute route = _routingTable.find(address, getZone(), resolveRemotely);
             if (route == null) {
                 LOGGER.trace("sendMessage : no route destination for : {}", address);
                 if (!hasTopicRoutes) {

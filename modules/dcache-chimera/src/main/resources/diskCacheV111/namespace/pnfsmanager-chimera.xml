@@ -21,7 +21,7 @@
 
     <bean id="noroutetocell" class="org.dcache.cells.LogNoRouteToCellExceptionReceiver">
         <description>Undeliverable message logger</description>
-        <property name="excludedDestinations" value="${pnfsmanager.destination.cache-notification}"/>
+        <property name="excludedDestinations" value="${pnfsmanager.destination.cache-notification},${pnfsmanager.destination.file-attributes-notification}"/>
     </bean>
 
   <bean abstract="true" id="pnfs-manager" class="diskCacheV111.namespace.PnfsManagerV3"
@@ -30,6 +30,7 @@
       <property name="threads" value="${pnfsmanager.limits.threads}"/>
       <property name="listThreads" value="${pnfsmanager.limits.list-threads}"/>
       <property name="cacheModificationRelay" value="${pnfsmanager.destination.cache-notification}"/>
+      <property name="fileAttributesRelay" value="${pnfsmanager.destination.file-attributes-notification}"/>
       <property name="logSlowThreshold" value="${pnfsmanager.limits.log-slow-threshold}"/>
       <property name="folding" value="${pnfsmanager.enable.folding}"/>
       <property name="directoryListLimit" value="${pnfsmanager.limits.list-chunk-size}"/>

@@ -61,15 +61,15 @@
 
         <version.slf4j>1.7.26</version.slf4j>
         <version.milton>2.7.3.0-dcache-1</version.milton>
-        <version.spring>5.1.0.RELEASE</version.spring>
+        <version.spring>5.2.2.RELEASE</version.spring>
         <!-- Remember to sync aspectj version in dcache.properties -->
         <version.aspectj>1.9.2</version.aspectj>
         <version.smc>6.6.0</version.smc>
         <version.xerces>2.11.0</version.xerces>
         <version.jetty>9.4.18.v20190429</version.jetty>
-        <version.xrootd4j>3.5.4</version.xrootd4j>
+        <version.xrootd4j>3.5.5</version.xrootd4j>
         <version.jersey>2.28</version.jersey>
-        <version.dcache-view>1.5.5</version.dcache-view>
+        <version.dcache-view>1.6.0</version.dcache-view>
         <version.netty>4.1.10.Final</version.netty>
         <version.dcache>${project.version}</version.dcache>
         <version.swagger-ui>3.1.7</version.swagger-ui>
@@ -81,13 +81,18 @@
              when upgrading logback. -->
         <version.logback>1.2.3</version.logback>
         <version.logback.contrib>0.1.5</version.logback.contrib>
-        <version.jackson.databind>2.9.10</version.jackson.databind>
-        <version.jackson.annotations>2.9.10</version.jackson.annotations>
-        <version.jackson.core>2.9.10</version.jackson.core>
+        <version.jackson.databind>2.10.1</version.jackson.databind>
+        <version.jackson.annotations>2.10.1</version.jackson.annotations>
+        <version.jackson.core>2.10.1</version.jackson.core>
         <version.jna>5.4.0</version.jna>
+        <version.fst>2.56</version.fst>
 
 
-        <spring-integration-kafka.version>3.0.1.RELEASE</spring-integration-kafka.version>
+
+
+        <version.spring-integration-kafka>3.2.1.RELEASE</version.spring-integration-kafka>
+        <version.spring_kafka>2.4.0.RELEASE</version.spring_kafka>
+        <version.kafka>2.4.0</version.kafka>
 
         <!-- BouncyCastle seems to change the naming convention of
              their ArtifactId fairly often.  Here is a summary of
@@ -119,7 +124,7 @@
         <bouncycastle.version>1.54</bouncycastle.version>
         <datanucleus-core.version>5.2.2</datanucleus-core.version>
         <datanucleus.plugin.version>5.2.1</datanucleus.plugin.version>
-        <hazelcast.version>3.11.1</hazelcast.version>
+        <hazelcast.version>3.12.5</hazelcast.version>
     </properties>
 
     <scm>
@@ -263,7 +268,7 @@
             <dependency>
                 <groupId>eu.eu-emi.security</groupId>
                 <artifactId>canl</artifactId>
-                <version>2.5.0</version>
+                <version>2.5.1</version>
             </dependency>
             <dependency>
                 <groupId>org.italiangrid</groupId>
@@ -444,6 +449,17 @@
                 <groupId>com.github.parboiled1</groupId>
                 <artifactId>grappa</artifactId>
                 <version>1.0.4</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.ow2.asm</groupId>
+                        <artifactId>asm-debug-all</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm</artifactId>
+                <version>7.2</version>
             </dependency>
             <dependency>
                 <groupId>org.datanucleus</groupId>
@@ -860,7 +876,7 @@
             <dependency>
                 <groupId>org.springframework.integration</groupId>
                 <artifactId>spring-integration-kafka</artifactId>
-                <version>${spring-integration-kafka.version}</version>
+                <version>${version.spring-integration-kafka}</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.kafka</groupId>
@@ -871,12 +887,12 @@
                         <artifactId>slf4j-log4j12</artifactId>
                     </exclusion>
                 </exclusions>
-                <version>2.1.1.RELEASE</version>
+                <version>${version.spring_kafka}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.kafka</groupId>
                 <artifactId>kafka_2.12</artifactId>
-                <version>1.0.0</version>
+                <version>${version.kafka}</version>
                 <exclusions>
                     <exclusion>
                         <groupId>org.apache.zookeeper</groupId>
@@ -901,7 +917,7 @@
                         <artifactId>slf4j-log4j12</artifactId>
                     </exclusion>
                 </exclusions>
-                <version>2.1.0</version>
+                <version>${version.kafka}</version>
             </dependency>
             <dependency>
                 <groupId>com.github.danielwegener</groupId>
@@ -967,6 +983,17 @@
                 <artifactId>spring-plugin-core</artifactId>
                 <version>1.2.0.RELEASE</version>
             </dependency>
+            <dependency>
+                <!-- enforce version as javassist used by fst and powermock -->
+                <groupId>org.javassist</groupId>
+                <artifactId>javassist</artifactId>
+                <version>3.25.0-GA</version>
+            </dependency>
+            <dependency>
+                <groupId>de.ruedigermoeller</groupId>
+                <artifactId>fst</artifactId>
+                <version>${version.fst}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -974,38 +1001,19 @@
         <dependency>
             <groupId>org.hamcrest</groupId>
             <artifactId>hamcrest-library</artifactId>
-            <version>1.3</version>
+            <version>2.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
            <groupId>org.powermock</groupId>
-            <artifactId>powermock-api-mockito</artifactId>
-            <version>1.6.2</version>
+            <artifactId>powermock-api-mockito2</artifactId>
+            <version>2.0.4</version>
             <scope>test</scope>
-            <exclusions>
-                <!-- powermock-api-mockito depends on mockito-all,
-                     which includes all dependencies, including
-                     hamcrest, in the jar file.  Unfortunate this
-                     version of hamcrest (v1.1?) is incompatible with
-                     the version we compile against.  Somehow maven 3
-                     works (different CP order?), but using maven 2
-                     has unit-tests in error due to NoSuchMethod
-                     exceptions.
-
-                     Here, we replace mockito-all with mockito-core,
-                     which exposes the hamcrest dependency in the pom
-                     file.  This allowing maven to do the right
-                     thing. -->
-                <exclusion>
-                    <groupId>org.mockito</groupId>
-                    <artifactId>mockito-all</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>1.10.19</version>
+            <version>3.2.4</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -1016,7 +1024,7 @@
         <dependency>
             <groupId>org.powermock</groupId>
             <artifactId>powermock-module-junit4</artifactId>
-            <version>1.6.2</version>
+            <version>2.0.4</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -1100,7 +1108,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-assembly-plugin</artifactId>
-                    <version>2.6</version>
+                    <version>3.2.0</version>
                     <configuration>
                         <tarLongFileMode>gnu</tarLongFileMode>
                     </configuration>
@@ -1143,7 +1151,12 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.0.0-M3</version>
+		    <!-- Cannot upgrade until SUREFIRE-1719:
+
+			 https://issues.apache.org/jira/browse/SUREFIRE-1719
+
+			 is resolved -->
+                    <version>2.19.1</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -1237,6 +1250,9 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-enforcer-plugin</artifactId>
+                    <!-- Remember to update version in
+                         modules/logback-test-config/pom.xml when
+                         upgrading -->
                     <version>3.0.0-M2</version>
                 </plugin>
             </plugins>

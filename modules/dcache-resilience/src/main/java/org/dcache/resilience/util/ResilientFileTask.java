@@ -61,9 +61,9 @@ package org.dcache.resilience.util;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.time.format.DateTimeFormatter;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
@@ -103,8 +103,9 @@ public final class ResilientFileTask extends ErrorAwareTask implements Cancellab
     private static final String STAT_FORMAT
                     = "%-28s | %25s %25s | %25s %25s %25s | %9s %9s %9s | %15s\n";
 
-    private static final DateFormat DATE_FORMAT
-                    = new SimpleDateFormat("yyyy/MM/dd-HH:mm:ss");
+    private static final DateTimeFormatter DATE_FORMATER = DateTimeFormatter
+            .ofPattern("yyyy/MM/dd-HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
 
     private final PnfsId               pnfsId;
     private final FileOperationHandler handler;
@@ -230,7 +231,7 @@ public final class ResilientFileTask extends ErrorAwareTask implements Cancellab
         cancelled = true;
 
         if (migrationTask != null) {
-            migrationTask.cancel();
+            migrationTask.cancel(explanation);
         }
 
         if (future != null) {
@@ -258,8 +259,8 @@ public final class ResilientFileTask extends ErrorAwareTask implements Cancellab
                                          String target) {
         return String.format(STAT_FORMAT,
                         pnfsId,
-                        DATE_FORMAT.format(new Date(startTime)),
-                        DATE_FORMAT.format(new Date(endTime)),
+                        DATE_FORMATER.format(Instant.ofEpochMilli(startTime)),
+                        DATE_FORMATER.format(Instant.ofEpochMilli(endTime)),
                         parent == null ? "-----" : parent,
                         source == null ? "-----" : source,
                         target == null ? "-----" : target,

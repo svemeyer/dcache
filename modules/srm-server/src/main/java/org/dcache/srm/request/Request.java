@@ -108,20 +108,31 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 public abstract class Request extends Job {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Request.class);
+    private static final long DEFAULT_MAX_UPDATE_PERIOD = 10*60*60;
+
+    private transient AbstractStorageElement storage;
+    private transient Configuration configuration;
+    private int cyclicUpdateCounter;
+    private int retryDeltaTime = 1;
+    private boolean should_updateretryDeltaTime = true;
+
+    @Nullable
+    private final String description;
     private final String client_host;
     private final SRMUser user;
+    private final long max_update_period;
+    /** The ID of this SRM instance, as returned to the client. */
+    protected final String srmId;
 
-    public Request(@Nonnull SRMUser user,
-    long max_update_period,
-    long lifetime,
-    @Nullable String description,
-    String client_host
-        ) {
+    public Request(@Nonnull String srmId, @Nonnull SRMUser user,
+            long max_update_period, long lifetime, @Nullable String description,
+            String client_host) {
         super(lifetime);
         this.max_update_period = max_update_period;
         this.description = description;
         this.client_host = client_host;
         this.user = checkNotNull(user);
+        this.srmId = checkNotNull(srmId);
     }
 
    /**
@@ -129,23 +140,12 @@ public abstract class Request extends Job {
      * saved Request from persitance storage
      */
 
-    protected Request(
-    long id,
-    Long nextJobId,
-    long creationTime,
-    long lifetime,
-    int stateId,
-    SRMUser user,
-    String scheduelerId,
-    long schedulerTimeStamp,
-    int numberOfRetries,
-    long lastStateTransitionTime,
-    JobHistory[] jobHistoryArray,
-    int retryDeltaTime,
-    boolean should_updateretryDeltaTime,
-    String description,
-    String client_host,
-    String statusCodeString) {
+    protected Request(@Nonnull String srmId, long id, Long nextJobId,
+            long creationTime, long lifetime, int stateId, SRMUser user,
+            String scheduelerId, long schedulerTimeStamp, int numberOfRetries,
+            long lastStateTransitionTime, JobHistory[] jobHistoryArray,
+            int retryDeltaTime, boolean should_updateretryDeltaTime,
+            String description, String client_host, String statusCodeString) {
         super(id,
               nextJobId,
               creationTime,
@@ -162,42 +162,21 @@ public abstract class Request extends Job {
         this.description = description;
         this.client_host = client_host;
         this.user = user;
+        this.srmId = checkNotNull(srmId);
         LOGGER.debug("restored");
+        max_update_period = DEFAULT_MAX_UPDATE_PERIOD;
     }
 
 
-    /** general srm server configuration settings */
-    private transient Configuration configuration;
-    protected int cyclicUpdateCounter;
-    protected long max_update_period = 10*60*60;
-
-
-
-
-
-    /*
-     * private instance variables
-     */
-    protected int retryDeltaTime = 1;
-
-    protected boolean should_updateretryDeltaTime = true;
-
-    /** instance of the AbstractStorageElement implementation,
-     * class that gives us an interface to the
-     * underlying storage system
-     */
-    private transient AbstractStorageElement storage;
-
-    @Nullable
-    private String description;
 
     /**
-     * gets request id as int
+     * Returns this request ID, as it is received by the client.
      * @return
-     * request id
      */
-    public int getRequestNum() {
-        return (int) getId();
+    public String getClientRequestId() {
+        // REVISIT: the format here actually comes from the
+        // SrmHandler#prefix method, which is dCache-specific.
+        return srmId + ":" + getId();
     }
 
 
@@ -244,7 +223,7 @@ public abstract class Request extends Job {
     /**
      * reset retryDeltaTime to 1
      */
-    public void resetRetryDeltaTime() {
+    protected void resetRetryDeltaTime() {
         wlock();
         try {
             retryDeltaTime = 1;
@@ -257,7 +236,7 @@ public abstract class Request extends Job {
      * status is not going to change
      * set retry delta time to 1
      */
-    public void stopUpdating() {
+    protected void stopUpdating() {
         wlock();
         try {
             retryDeltaTime = 1;
@@ -300,21 +279,7 @@ public abstract class Request extends Job {
 
     @Nullable
     public final String getDescription() {
-        rlock();
-        try {
-            return description;
-        } finally {
-            runlock();
-        }
-    }
-
-    public final void setDescription(String description) {
-        wlock();
-        try {
-            this.description = description;
-        } finally {
-            wunlock();
-        }
+        return description;
     }
 
     public String getClient_host() {
@@ -325,10 +290,10 @@ public abstract class Request extends Job {
     {
         wlock();
         try {
-            if (creationTime + lifetime < System.currentTimeMillis() && !getState().isFinal()) {
-                LOGGER.info("expiring request #{}", getId());
+            if (creationTime + getLifetime() < System.currentTimeMillis() && !getState().isFinal()) {
+                LOGGER.info("expiring request {}", getClientRequestId());
                 StringBuilder sb = new StringBuilder().append("Request lifetime (");
-                TimeUtils.appendDuration(sb, lifetime, MILLISECONDS, TimeUnitFormat.SHORT).append(") expired.");
+                TimeUtils.appendDuration(sb, getLifetime(), MILLISECONDS, TimeUnitFormat.SHORT).append(") expired.");
                 setStateAndStatusCode(State.FAILED, sb.toString(), TStatusCode.SRM_REQUEST_TIMED_OUT);
             }
         } catch (IllegalStateTransition e) {
@@ -341,7 +306,7 @@ public abstract class Request extends Job {
     /**
      * @return the storage
      */
-    public final AbstractStorageElement getStorage() {
+    protected final AbstractStorageElement getStorage() {
         if(storage == null) {
             storage = SRM.getSRM().getStorage();
         }
@@ -352,7 +317,7 @@ public abstract class Request extends Job {
     /**
      * @return the configuration
      */
-    public final Configuration getConfiguration() {
+    protected final Configuration getConfiguration() {
         if(configuration == null) {
             configuration = SRM.getSRM().getConfiguration();
         }

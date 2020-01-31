@@ -74,7 +74,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.dcache.alarms.AlarmMarkerFactory;
 import org.dcache.alarms.PredefinedAlarm;
@@ -94,6 +96,7 @@ import org.dcache.namespace.FileAttribute;
 import org.dcache.nfs.ChimeraNFSException;
 import org.dcache.nfs.ExportFile;
 import org.dcache.nfs.FsExport;
+import org.dcache.nfs.InetAddressMatcher;
 import org.dcache.nfs.nfsstat;
 import org.dcache.nfs.status.DelayException;
 import org.dcache.nfs.status.LayoutTryLaterException;
@@ -169,7 +172,6 @@ import org.dcache.oncrpc4j.rpc.gss.GssSessionManager;
 
 import static java.util.stream.Collectors.toList;
 
-import java.util.stream.Stream;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -197,7 +199,10 @@ public class NFSv41Door extends AbstractCellComponent implements
      */
     private final PoolDeviceMap _poolDeviceMap = new PoolDeviceMap();
 
-    private final Map<stateid4, NfsTransfer> _ioMessages = new ConcurrentHashMap<>();
+    /**
+     * Mapping between open state id and corresponding transfer.
+     */
+    private final Map<stateid4, NfsTransfer> _transfers = new ConcurrentHashMap<>();
 
     /**
      * Maximal time the NFS request will blocked before we reply with
@@ -489,7 +494,7 @@ public class NFSv41Door extends AbstractCellComponent implements
         PoolDS device = _poolDeviceMap.getOrCreateDS(poolName, verifier, poolAddresses);
 
         org.dcache.chimera.nfs.v4.xdr.stateid4 legacyStateid = message.challange();
-        NfsTransfer transfer = _ioMessages.get(new stateid4(legacyStateid.other, legacyStateid.seqid.value));
+        NfsTransfer transfer = _transfers.get(new stateid4(legacyStateid.other, legacyStateid.seqid.value));
         /*
          * We got a notification for a transfer which was not
          * started by us.
@@ -513,7 +518,7 @@ public class NFSv41Door extends AbstractCellComponent implements
          *   - triggered by pool shutdown.
          */
         stateid4 openStateId = new stateid4(legacyStateid.other, legacyStateid.seqid.value);
-        NfsTransfer transfer = _ioMessages.get(openStateId);
+        NfsTransfer transfer = _transfers.get(openStateId);
         if (transfer == null) {
             return;
         }
@@ -533,7 +538,7 @@ public class NFSv41Door extends AbstractCellComponent implements
                 transfer.enforceErrorIfRunning(POISON);
             } else {
                 // it's ok to remove read mover as it's safe to re-create it again.
-                _ioMessages.remove(openStateId);
+                _transfers.remove(openStateId);
             }
         }
     }
@@ -661,7 +666,7 @@ public class NFSv41Door extends AbstractCellComponent implements
                             nfsInode.toNfsHandle()
                         );
 
-                NfsTransfer transfer = _ioMessages.get(openStateId.stateid());
+                NfsTransfer transfer = _transfers.get(openStateId.stateid());
                 if (transfer == null) {
                     Transfer.initSession(false, false);
                     NDC.push(pnfsId.toString());
@@ -699,11 +704,11 @@ public class NFSv41Door extends AbstractCellComponent implements
                             /* write request keep in the message map to
                              * avoid re-creates and trigger errors.
                              */
-                            _ioMessages.remove(openStateId.stateid());
+                            _transfers.remove(openStateId.stateid());
                         }
                     });
 
-                     _ioMessages.put(openStateId.stateid(), transfer);
+                     _transfers.put(openStateId.stateid(), transfer);
                 } else {
                     // keep debug context in sync
                     transfer.restoreSession();
@@ -802,7 +807,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
             getLayoutDriver(layoutType).acceptLayoutReturnData(context, args.lora_layoutreturn.lr_layout.lrf_body);
 
-            NfsTransfer transfer = _ioMessages.get(openState.stateid());
+            NfsTransfer transfer = _transfers.get(openState.stateid());
             if (transfer != null) {
                 transfer.shutdownMover();
             }
@@ -874,7 +879,7 @@ public class NFSv41Door extends AbstractCellComponent implements
             pw.printf("  Supported Layout types  : %s\n", _supportedDrivers.keySet());
             pw.printf("  Number of NFSv4 clients : %d\n", _nfs4.getStateHandler().getClients().size());
             pw.printf("  Total pools (DS) used   : %d\n", _poolDeviceMap.getEntries().stream().count());
-            pw.printf("  Active transfers        : %d\n", _ioMessages.values().size());
+            pw.printf("  Active transfers        : %d\n", _transfers.values().size());
             pw.printf("  Known proxy adapters    : %d\n", _proxyIoFactory.getCount());
         }
     }
@@ -969,7 +974,7 @@ public class NFSv41Door extends AbstractCellComponent implements
             description = "Show NFSv4 clients and corresponding sessions.")
     public class ShowClientsCmd implements Callable<String> {
 
-        @Argument(required = false, metaVar = "host")
+        @Argument(required = false, metaVar = "host", usage = "address/netmask|pattern")
         String host;
 
         @Override
@@ -978,12 +983,13 @@ public class NFSv41Door extends AbstractCellComponent implements
                 return "NFSv4 server not running.";
             }
 
-            InetAddress clientAddress = InetAddress.getByName(host);
-            StringBuilder sb = new StringBuilder();
+            Predicate<InetAddress> clientMatcher =
+		    host == null ? c -> true: InetAddressMatcher.forPattern(host);
 
+            StringBuilder sb = new StringBuilder();
             _nfs4.getStateHandler().getClients()
                     .stream()
-                    .filter(c -> host == null? true : c.getRemoteAddress().getAddress().equals(clientAddress))
+                    .filter(c -> clientMatcher.test(c.getRemoteAddress().getAddress()))
                     .forEach(c -> {
                         sb.append("    ").append(c).append("\n");
                         for (NFSv41Session session : c.sessions()) {
@@ -1037,7 +1043,7 @@ public class NFSv41Door extends AbstractCellComponent implements
         @Override
         public String call() throws IOException {
 
-            return _ioMessages.values()
+            return _transfers.values()
                     .stream()
                     .filter(d -> pool == null ? true : pool.matches(d.getPool() == null ? "" : d.getPool().getName()))
                     .filter(d -> client == null ? true : client.matches(d.getClient().toString()))
@@ -1059,7 +1065,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
             StringBuilder sb = new StringBuilder();
             _proxyIoFactory.forEach(p -> {
-                NfsTransfer t = _ioMessages.get(p.getStateId());
+                NfsTransfer t = _transfers.get(p.getStateId());
                 sb.append(t).append('\n');
             });
             return sb.toString();
@@ -1320,7 +1326,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
                 // failed without any pool has been selected.
                 // Depending on the error client may re-try the requests.
-                if (_redirectFuture.isDone() && getPool() == null) {
+                if (_redirectFuture != null && _redirectFuture.isDone() && getPool() == null) {
                     _redirectFuture = null;
                 }
 
@@ -1397,7 +1403,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
             if (!hasMover()) {
                 // the mover clean-up will not be called, thus we have to clean manually
-                _ioMessages.remove(_openStateid.stateid());
+                _transfers.remove(_openStateid.stateid());
                 return;
             }
 
@@ -1483,7 +1489,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
             // writes should stay poisoned to fail on client retry.
             if (!isWrite()) {
-                _ioMessages.remove(_openStateid.stateid());
+                _transfers.remove(_openStateid.stateid());
             }
             killMover(0, "layout recall on pool down");
             // keep NFSTransfer#shutdown happy
@@ -1520,7 +1526,7 @@ public class NFSv41Door extends AbstractCellComponent implements
         @Override
         public Serializable call() {
 
-            List<IoDoorEntry> entries = _ioMessages.values()
+            List<IoDoorEntry> entries = _transfers.values()
                     .stream()
                     .map(Transfer::getIoDoorEntry)
                     .collect(toList());
@@ -1572,7 +1578,7 @@ public class NFSv41Door extends AbstractCellComponent implements
 
             // FIXME: we should wait for all inuse layouts being released
             if (recall) {
-                _ioMessages.values().stream()
+                _transfers.values().stream()
                         .filter(t -> t.getRedirect() != null)
                         .filter(t -> pool.equals(t.getPool().getName()))
                         .forEach(t -> t.recallLayout(_callbackExecutor));
@@ -1617,7 +1623,7 @@ public class NFSv41Door extends AbstractCellComponent implements
         @Override
         public String call() {
             stateid4 stateid = new stateid4(BaseEncoding.base16().lowerCase().decode(os), 0);
-            NfsTransfer t = _ioMessages.get(stateid);
+            NfsTransfer t = _transfers.get(stateid);
             if (t == null) {
                 return "No matching transfer";
             }
@@ -1639,7 +1645,7 @@ public class NFSv41Door extends AbstractCellComponent implements
         @Override
         public String call() {
             stateid4 stateid = new stateid4(BaseEncoding.base16().lowerCase().decode(os), 0);
-            NfsTransfer t = _ioMessages.remove(stateid);
+            NfsTransfer t = _transfers.remove(stateid);
             if (t == null) {
                 return "No matching transfer";
             }
@@ -1657,7 +1663,7 @@ public class NFSv41Door extends AbstractCellComponent implements
      */
     private synchronized long recallLayouts(String pool) {
 
-        return _ioMessages.values().stream()
+        return _transfers.values().stream()
                 .filter(t -> t.getPool() != null)
                 .filter(t -> pool.equals(t.getPool().getName()))
                 .filter(t -> t.getClient().getMinorVersion() > 0)

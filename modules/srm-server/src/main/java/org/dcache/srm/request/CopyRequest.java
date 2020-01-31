@@ -157,7 +157,8 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
 
     private volatile boolean processingDone;
 
-    public CopyRequest(SRMUser user,
+    public CopyRequest(@Nonnull String srmId,
+            SRMUser user,
             Long requestCredentialId,
             URI[] sourceUrl,
             URI[] destinationUrl,
@@ -172,7 +173,7 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
             TOverwriteMode overwriteMode,
             ImmutableMap<String,String> extraInfo)
     {
-        super(user, maxUpdatePeriod, lifetime, description, clientHost,
+        super(srmId, user, maxUpdatePeriod, lifetime, description, clientHost,
               id -> {
                   checkArgument(sourceUrl.length == destinationUrl.length,
                                 "unequal number of elements in url arrays");
@@ -213,7 +214,8 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
     /**
      * restore constructor
      */
-    public CopyRequest(long id,
+    public CopyRequest(@Nonnull String srmId,
+            long id,
             Long nextJobId,
             long creationTime,
             long lifetime,
@@ -235,7 +237,7 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
             TRetentionPolicy targetRetentionPolicy,
             TAccessLatency targetAccessLatency)
     {
-        super(id, nextJobId, creationTime, lifetime, stateId,
+        super(srmId, id, nextJobId, creationTime, lifetime, stateId,
                 user, scheduelerId, schedulerTimeStamp, numberOfRetries,
                 lastStateTransitionTime, jobHistoryArray,
                 fileRequest, retryDeltaTime, should_updateretryDeltaTime,
@@ -554,7 +556,7 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
                         cfr.scheduleWith(Scheduler.getScheduler(theSchedulerId));
                     }
                 } catch (IllegalStateException | IllegalArgumentException |
-                        IllegalStateTransition | InterruptedException e) {
+                        IllegalStateTransition e) {
                     LOGGER.error("failed to schedule CopyFileRequest {}: {}", cfr, e.toString());
                     try {
                         cfr.setState(State.FAILED, "Failed to schedule request: " + e.getMessage());
@@ -586,7 +588,6 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
                 } catch (IllegalStateTransition ist) {
                     LOGGER.error("Illegal State Transition : {}", ist.getMessage());
                 }
-                cfr.saveJob();
             }
         }
         remoteFileRequestDone(surl, remoteRequestId, remoteFileId);
@@ -600,7 +601,6 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
             remoteSurlToFileReqIds.clear();
         }
         for (Map.Entry<String, Long> entry : entries) {
-            String surl = entry.getKey();
             long id = entry.getValue();
             CopyFileRequest cfr = getFileRequest(id);
             try {
@@ -611,7 +611,6 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
             } catch (IllegalStateTransition ist) {
                 LOGGER.error("Illegal State Transition : {}", ist.getMessage());
             }
-            cfr.saveJob();
         }
     }
 
@@ -683,28 +682,29 @@ public final class CopyRequest extends ContainerRequest<CopyFileRequest>
     }
 
     @Override
-    protected void stateChanged(State oldState)
+    protected void processStateChange(State newState, String description)
     {
-        State state = getState();
-        if (state.isFinal()) {
+        if (newState.isFinal()) {
             TurlGetterPutter client = getRemoteTurlClient();
             if (client != null) {
                 LOGGER.debug("copyRequest TURL-fetching client is non null, stopping");
                 client.stop();
             }
-            LOGGER.debug("copy request state changed to {}", state);
+            LOGGER.debug("copy request state changed to {}", newState);
             for (CopyFileRequest request : getFileRequests()) {
                 try {
                     State frState = request.getState();
-                    if (!(frState.isFinal())) {
-                        LOGGER.debug("changing fr#{} to {}", request.getId(), state);
-                        request.setState(state, "Request now " + state);
+                    if (!frState.isFinal()) {
+                        LOGGER.debug("changing fr#{} to {}", request.getId(), newState);
+                        request.setState(newState, "Request changed: " + description);
                     }
                 } catch (IllegalStateTransition ist) {
                     LOGGER.error("Illegal State Transition : {}", ist.getMessage());
                 }
             }
         }
+
+        super.processStateChange(newState, description);
     }
 
     @Override

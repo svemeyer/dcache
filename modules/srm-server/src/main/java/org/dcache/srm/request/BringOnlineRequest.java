@@ -111,20 +111,13 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
     private final long desiredOnlineLifetimeInSeconds;
 
 
-    public BringOnlineRequest(SRMUser user,
-                              URI[] surls,
-                              String[] protocols,
-                              long lifetime,
+    public BringOnlineRequest(@Nonnull String srmId, SRMUser user, URI[] surls,
+                              String[] protocols, long lifetime,
                               long desiredOnlineLifetimeInSeconds,
-                              long max_update_period,
-                              String description,
+                              long max_update_period, String description,
                               String client_host)
     {
-        super(user,
-              max_update_period,
-              lifetime,
-              description,
-              client_host,
+        super(srmId, user, max_update_period, lifetime, description, client_host,
               id -> {
                   ImmutableList.Builder<BringOnlineFileRequest> requests = ImmutableList.builder();
                   Stream.of(surls).distinct()
@@ -147,46 +140,21 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
     /**
      * restore constructor
      */
-    public  BringOnlineRequest(
-    long id,
-    Long nextJobId,
-    long creationTime,
-    long lifetime,
-    int stateId,
-    SRMUser user,
-    String scheduelerId,
-    long schedulerTimeStamp,
-    int numberOfRetries,
-    long lastStateTransitionTime,
-    JobHistory[] jobHistoryArray,
-    ImmutableList<BringOnlineFileRequest> fileRequests,
-    int retryDeltaTime,
-    boolean should_updateretryDeltaTime,
-    String description,
-    String client_host,
-    String statusCodeString,
-    String[] protocols
-   ) {
-        super( id,
-        nextJobId,
-        creationTime,
-        lifetime,
-        stateId,
-        user,
-        scheduelerId,
-        schedulerTimeStamp,
-        numberOfRetries,
-        lastStateTransitionTime,
-        jobHistoryArray,
-        fileRequests,
-        retryDeltaTime,
-        should_updateretryDeltaTime,
-        description,
-        client_host,
-        statusCodeString);
+    public BringOnlineRequest(@Nonnull String srmId, long id, Long nextJobId,
+            long creationTime, long lifetime, int stateId, SRMUser user,
+            String scheduelerId, long schedulerTimeStamp, int numberOfRetries,
+            long lastStateTransitionTime, JobHistory[] jobHistoryArray,
+            ImmutableList<BringOnlineFileRequest> fileRequests, int retryDeltaTime,
+            boolean should_updateretryDeltaTime, String description,
+            String client_host, String statusCodeString, String[] protocols)
+    {
+        super(srmId, id, nextJobId, creationTime, lifetime, stateId, user,
+                scheduelerId, schedulerTimeStamp, numberOfRetries,
+                lastStateTransitionTime, jobHistoryArray, fileRequests,
+                retryDeltaTime, should_updateretryDeltaTime, description,
+                client_host, statusCodeString);
         this.protocols = protocols;
         this.desiredOnlineLifetimeInSeconds = 0;
-
     }
 
     @Nonnull
@@ -208,8 +176,7 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
     }
 
     @Override
-    public void scheduleWith(Scheduler scheduler) throws InterruptedException,
-            IllegalStateTransition
+    public void scheduleWith(Scheduler scheduler) throws IllegalStateTransition
     {
         // save this request in request storage unconditionally
         // file requests will get stored as soon as they are
@@ -248,16 +215,16 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
     }
 
     @Override
-    protected void stateChanged(State oldState) {
-        State state = getState();
-        if (state.isFinal()) {
-            LOGGER.debug("Get request state changed to {}", state);
+    protected void processStateChange(State newState, String description)
+    {
+        if (newState.isFinal()) {
+            LOGGER.debug("Get request state changed to {}", newState);
             for (BringOnlineFileRequest fr: getFileRequests()) {
                 fr.wlock();
                 try {
                     if (!fr.getState().isFinal()) {
-                        LOGGER.debug("Changing fr#{} to {}", fr.getId(), state);
-                        fr.setState(state, "Changing file state because request state has changed.");
+                        LOGGER.debug("Changing fr#{} to {}", fr.getId(), newState);
+                        fr.setState(newState, "Request changed: " + description);
                     }
                 } catch (IllegalStateTransition e) {
                     LOGGER.error(e.getMessage());
@@ -266,6 +233,8 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
                 }
             }
         }
+
+        super.processStateChange(newState, description);
     }
 
     /**
@@ -297,7 +266,7 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
         return response;
     }
 
-    public final SrmBringOnlineResponse getSrmBringOnlineResponse()
+    private final SrmBringOnlineResponse getSrmBringOnlineResponse()
             throws SRMInvalidRequestException
     {
         SrmBringOnlineResponse response = new SrmBringOnlineResponse();
@@ -431,7 +400,7 @@ public final class BringOnlineRequest extends ContainerRequest<BringOnlineFileRe
         return TRequestType.BRING_ONLINE;
     }
 
-    public long getDesiredOnlineLifetimeInSeconds() {
+    protected long getDesiredOnlineLifetimeInSeconds() {
         return desiredOnlineLifetimeInSeconds;
     }
 

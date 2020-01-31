@@ -84,9 +84,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.function.LongFunction;
 
-import diskCacheV111.srm.RequestFileStatus;
-import diskCacheV111.srm.RequestStatus;
-
 import org.dcache.util.AtomicCounter;
 import org.dcache.srm.SRMException;
 import org.dcache.srm.SRMFileRequestNotFoundException;
@@ -143,18 +140,11 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
      * @param configuration
      *   srm configuration
      */
-    public ContainerRequest(SRMUser user,
-                            long max_update_period,
-                            long lifetime,
-                            @Nullable String description,
-                            String client_host,
-                            LongFunction<ImmutableList<R>> factory)
+    public ContainerRequest(@Nonnull String srmId, SRMUser user,
+            long max_update_period, long lifetime, @Nullable String description,
+            String client_host, LongFunction<ImmutableList<R>> factory)
     {
-         super(user ,
-         max_update_period,
-         lifetime,
-         description,
-         client_host);
+         super(srmId, user, max_update_period, lifetime, description, client_host);
          fileRequests = factory.apply(getId());
     }
 
@@ -163,46 +153,21 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
      * this constructor is used for restoring the previously
      * saved ContainerRequest from persitance storage
      */
-
-
-    protected ContainerRequest(
-    long id,
-    Long nextJobId,
-    long creationTime,
-    long lifetime,
-    int stateId,
-    SRMUser user,
-    String scheduelerId,
-    long schedulerTimeStamp,
-    int numberOfRetries,
-    long lastStateTransitionTime,
-    JobHistory[] jobHistoryArray,
-    ImmutableList<R> fileRequests,
-    int retryDeltaTime,
-    boolean should_updateretryDeltaTime,
-    String description,
-    String client_host,
-    String statusCodeString) {
-     super(     id,
-     nextJobId,
-     creationTime,
-     lifetime,
-     stateId,
-     user,
-     scheduelerId,
-     schedulerTimeStamp,
-     numberOfRetries,
-     lastStateTransitionTime,
-     jobHistoryArray,
-     retryDeltaTime,
-     should_updateretryDeltaTime,
-     description,
-     client_host,
-     statusCodeString);
+    protected ContainerRequest(@Nonnull String srmId, long id, Long nextJobId,
+            long creationTime, long lifetime, int stateId, SRMUser user,
+            String scheduelerId, long schedulerTimeStamp, int numberOfRetries,
+            long lastStateTransitionTime, JobHistory[] jobHistoryArray,
+            ImmutableList<R> fileRequests, int retryDeltaTime,
+            boolean should_updateretryDeltaTime, String description,
+            String client_host, String statusCodeString) {
+        super(srmId, id, nextJobId, creationTime, lifetime, stateId, user, scheduelerId,
+                schedulerTimeStamp, numberOfRetries, lastStateTransitionTime,
+                jobHistoryArray, retryDeltaTime, should_updateretryDeltaTime,
+                description, client_host, statusCodeString);
         this.fileRequests = fileRequests;
     }
 
-    public final R getFileRequest(long fileRequestId){
+    protected final R getFileRequest(long fileRequestId){
         for (R fileRequest: fileRequests) {
             if (fileRequest.getId() == fileRequestId) {
                 return fileRequest;
@@ -220,12 +185,12 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
      * @return
      * a number of file requests
      */
-    public int getNumOfFileRequest()
+    protected int getNumOfFileRequest()
     {
         return fileRequests.size();
     }
 
-    public URI getPreviousTurl() {
+    protected URI getPreviousTurl() {
         rlock();
         try {
             return previousTurl;
@@ -234,7 +199,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         }
     }
 
-    public void setPreviousTurl(URI s) {
+    protected void setPreviousTurl(URI s) {
         wlock();
         try {
             previousTurl = s;
@@ -339,14 +304,14 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         }
     }
 
-    public TReturnStatus getTReturnStatus()  {
+    protected TReturnStatus getTReturnStatus()  {
         updateStatus();
 
         String description;
 
         rlock();
         try {
-            description = getLastJobChange().getDescription();
+            description = latestHistoryEvent();
             TStatusCode statusCode = getStatusCode();
             if (statusCode != null) {
                 return new TReturnStatus(statusCode, description);
@@ -499,7 +464,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
 
     }
 
-    public abstract TRequestType getRequestType();
+    protected abstract TRequestType getRequestType();
 
 
     /**
@@ -525,11 +490,11 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
     /**
      * Provide a simple human-friendly name for requests of this type.
      */
-    abstract String getNameForRequestType();
+    protected abstract String getNameForRequestType();
 
     @Override
     public void toString(StringBuilder sb, boolean longformat) {
-        sb.append(getNameForRequestType()).append(" id:").append(getId());
+        sb.append(getNameForRequestType()).append(" id:").append(getClientRequestId());
         sb.append(" files:").append(fileRequests.size());
         sb.append(" state:").append(getState());
         TStatusCode code = getStatusCode();
@@ -558,7 +523,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
         }
     }
 
-    public void fileRequestStateChanged(R request)
+    protected void fileRequestStateChanged(R request)
     {
         switch (request.getState()) {
         case RQUEUED:
@@ -573,7 +538,7 @@ public abstract class ContainerRequest<R extends FileRequest<?>> extends Request
     @Nonnull
     public abstract R getFileRequestBySurl(URI surl) throws SRMFileRequestNotFoundException;
 
-    public List<R> getFileRequests()  {
+    protected List<R> getFileRequests()  {
         return fileRequests;
     }
 

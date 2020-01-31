@@ -223,7 +223,6 @@ public class CellNucleus implements ThreadFactory
 
         CuratorFramework curatorFramework = __cellGlue.getCuratorFramework();
         _curatorFramework = new CellCuratorFramework(curatorFramework, _messageExecutor);
-        _curatorFramework.start();
 
         LOGGER.info("Created {}", cellName);
     }
@@ -252,10 +251,10 @@ public class CellNucleus implements ThreadFactory
     }
 
     public static void initCellGlue(String cellDomainName,
-            CuratorFramework curatorFramework, Optional<String> zone)
+            CuratorFramework curatorFramework, Optional<String> zone, SerializationHandler.Serializer serializer)
     {
         checkState(__cellGlue == null);
-        __cellGlue = new CellGlue(cellDomainName, curatorFramework, zone);
+        __cellGlue = new CellGlue(cellDomainName, curatorFramework, zone, serializer);
     }
 
     public static void startCurator()
@@ -1003,13 +1002,6 @@ public class CellNucleus implements ThreadFactory
              */
             _waitHash.forEach((uoid, lock) -> timeOutMessage(uoid, lock, (u, l) -> {}));
 
-            /* Shut down the curator decorator; this just kills the internal executor of the decorator
-             * while still allowing it to be used for operations without callbacks.
-             */
-            if (_curatorFramework != null) {
-                _curatorFramework.close();
-            }
-
             /* Shut down message executor.
              */
             if (!MoreExecutors.shutdownAndAwaitTermination(_messageExecutor, 2, TimeUnit.SECONDS)) {
@@ -1128,7 +1120,7 @@ public class CellNucleus implements ThreadFactory
         __cellGlue.routeDelete(route);
     }
     CellRoute routeFind(CellAddressCore addr) {
-        return __cellGlue.getRoutingTable().find(addr, true);
+        return __cellGlue.getRoutingTable().find(addr, getZone(), true);
     }
     public CellRoutingTable getRoutingTable() { return __cellGlue.getRoutingTable(); }
     public CellRoute [] getRoutingList() { return __cellGlue.getRoutingList(); }
@@ -1144,6 +1136,11 @@ public class CellNucleus implements ThreadFactory
     public Optional<String> getZone()
     {
         return __cellGlue.getZone();
+    }
+
+    public SerializationHandler.Serializer getMsgSerialization()
+    {
+        return __cellGlue.getMessageSerializer();
     }
 
     //

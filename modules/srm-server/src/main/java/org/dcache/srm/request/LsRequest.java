@@ -41,7 +41,8 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
         private final boolean longFormat;
         private String explanation;
 
-        public LsRequest(SRMUser user,
+        public LsRequest(@Nonnull String srmId,
+                         SRMUser user,
                          URI[] surls,
                          long lifetime,
                          long max_update_period,
@@ -50,9 +51,9 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
                          long offset,
                          int numOfLevels,
                          boolean longFormat,
-                         int maxNumOfResults )
+                         int maxNumOfResults)
         {
-                super(user, max_update_period, lifetime, "Ls request", client_host,
+                super(srmId, user, max_update_period, lifetime, "Ls request", client_host,
                       id -> {
                           ImmutableList.Builder<LsFileRequest> requests = ImmutableList.builder();
                           Stream.of(surls)
@@ -67,53 +68,26 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
                 this.maxNumOfResults = maxNumOfResults;
         }
 
-        public  LsRequest(
-                long id,
-                Long nextJobId,
-                long creationTime,
-                long lifetime,
-                int stateId,
-                SRMUser user,
-                String scheduelerId,
-                long schedulerTimeStamp,
-                int numberOfRetries,
-                long lastStateTransitionTime,
-                JobHistory[] jobHistoryArray,
-                ImmutableList<LsFileRequest> fileRequests,
-                int retryDeltaTime,
-                boolean should_updateretryDeltaTime,
-                String description,
-                String client_host,
-                String statusCodeString,
-                String explanation,
-                boolean longFormat,
-                int numOfLevels,
-                long count,
-                long offset) {
-                super(id,
-                      nextJobId,
-                      creationTime,
-                      lifetime,
-                      stateId,
-                      user,
-                      scheduelerId,
-                      schedulerTimeStamp,
-                      numberOfRetries,
-                      lastStateTransitionTime,
-                      jobHistoryArray,
-                      fileRequests,
-                      retryDeltaTime,
-                      should_updateretryDeltaTime,
-                      description,
-                      client_host,
-                      statusCodeString);
-                this.explanation=explanation;
-                this.longFormat=longFormat;
-                this.numOfLevels=numOfLevels;
-                this.maxNumOfResults = 100;
-                this.count=count;
-                this.offset=offset;
-
+        public  LsRequest(@Nonnull String srmId, long id, Long nextJobId,
+                long creationTime, long lifetime, int stateId, SRMUser user,
+                String scheduelerId, long schedulerTimeStamp, int numberOfRetries,
+                long lastStateTransitionTime, JobHistory[] jobHistoryArray,
+                ImmutableList<LsFileRequest> fileRequests, int retryDeltaTime,
+                boolean should_updateretryDeltaTime, String description,
+                String client_host, String statusCodeString, String explanation,
+                boolean longFormat, int numOfLevels, long count, long offset)
+        {
+            super(srmId, id, nextJobId, creationTime, lifetime, stateId, user,
+                    scheduelerId, schedulerTimeStamp, numberOfRetries,
+                    lastStateTransitionTime, jobHistoryArray, fileRequests,
+                    retryDeltaTime, should_updateretryDeltaTime, description,
+                    client_host, statusCodeString);
+            this.explanation=explanation;
+            this.longFormat=longFormat;
+            this.numOfLevels=numOfLevels;
+            this.maxNumOfResults = 100;
+            this.count=count;
+            this.offset=offset;
         }
 
         @Nonnull
@@ -136,8 +110,7 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
         }
 
         @Override
-        public void scheduleWith(Scheduler scheduler) throws InterruptedException,
-                IllegalStateTransition
+        public void scheduleWith(Scheduler scheduler) throws IllegalStateTransition
         {
             // save this request in request storage unconditionally
             // file requests will get stored as soon as they are
@@ -164,23 +137,25 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
         }
 
         @Override
-        protected void stateChanged(State oldState) {
-                State state = getState();
-                if(state.isFinal()) {
-                        for (LsFileRequest fr : getFileRequests() ) {
-                                fr.wlock();
-                                try {
-                                        State fr_state = fr.getState();
-                                        if(!fr_state.isFinal()) {
-                                                fr.setState(state, "Changing file state because request state has changed.");
-                                        }
-                                } catch(IllegalStateTransition ist) {
-                                        LOGGER.error("Illegal State Transition : {}", ist.getMessage());
-                                } finally {
-                                    fr.wunlock();
-                                }
+        protected void processStateChange(State newState, String description)
+        {
+            if (newState.isFinal()) {
+                for (LsFileRequest fr : getFileRequests()) {
+                    fr.wlock();
+                    try {
+                        State fr_state = fr.getState();
+                        if (!fr_state.isFinal()) {
+                            fr.setState(newState, "Request changed: " + description);
                         }
+                    } catch(IllegalStateTransition ist) {
+                        LOGGER.error("Illegal State Transition : {}", ist.getMessage());
+                    } finally {
+                        fr.wunlock();
+                    }
                 }
+            }
+
+            super.processStateChange(newState, description);
         }
 
         /**
@@ -431,7 +406,7 @@ public final class LsRequest extends ContainerRequest<LsFileRequest> {
 
         @Override
         public void toString(StringBuilder sb, boolean longformat) {
-            sb.append(getNameForRequestType()).append(" id:").append(getId());
+            sb.append(getNameForRequestType()).append(" id:").append(getClientRequestId());
             sb.append(" files:").append(getFileRequests().size());
             sb.append(" state:").append(getState());
             TStatusCode code = getStatusCode();

@@ -28,6 +28,7 @@ import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
@@ -36,8 +37,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
-import diskCacheV111.namespace.NameSpaceProvider.Link;
+import diskCacheV111.util.AccessLatency;
 import diskCacheV111.util.CacheException;
 import diskCacheV111.util.FileNotFoundCacheException;
 import diskCacheV111.util.FsPath;
@@ -46,6 +48,7 @@ import diskCacheV111.util.MissingResourceCacheException;
 import diskCacheV111.util.NotDirCacheException;
 import diskCacheV111.util.PermissionDeniedCacheException;
 import diskCacheV111.util.PnfsId;
+import diskCacheV111.util.RetentionPolicy;
 import diskCacheV111.vehicles.DoorCancelledUploadNotificationMessage;
 import diskCacheV111.vehicles.Message;
 import diskCacheV111.vehicles.PnfsAddCacheLocationMessage;
@@ -110,8 +113,6 @@ import static org.dcache.acl.enums.AccessType.*;
 import static org.dcache.auth.Subjects.ROOT;
 import static org.dcache.auth.attributes.Activity.*;
 import static org.dcache.namespace.FileAttribute.*;
-import static org.dcache.namespace.FileType.DIR;
-import static org.dcache.namespace.FileType.REGULAR;
 
 public class PnfsManagerV3
     extends AbstractCellComponent
@@ -176,6 +177,12 @@ public class PnfsManagerV3
 
     private CellPath _cacheModificationRelay;
 
+    /**
+     * These involve changes
+     * to access latency and retention policy.
+     */
+    private CellPath _attributesRelay;
+
     private PermissionHandler _permissionHandler;
     private NameSpaceProvider _nameSpaceProvider;
 
@@ -236,6 +243,15 @@ public class PnfsManagerV3
             Strings.isNullOrEmpty(path) ? null : new CellPath(path);
         _log.info("CacheModificationRelay = {}",
                   (_cacheModificationRelay == null) ? "NONE" : _cacheModificationRelay.toString());
+    }
+
+    @Required
+    public void setFileAttributesRelay(String path)
+    {
+        _attributesRelay =
+                        Strings.isNullOrEmpty(path) ? null : new CellPath(path);
+        _log.info("attributesRelay = {}",
+                  (_attributesRelay == null) ? "NONE" : _attributesRelay.toString());
     }
 
     @Required
@@ -1750,6 +1766,13 @@ public class PnfsManagerV3
 
     private void postProcessMessage(CellMessage envelope, PnfsMessage message)
     {
+        if (_attributesRelay != null &&
+                        message instanceof PnfsSetFileAttributes &&
+                        message.getReturnCode() == 0) {
+            postProcessSetFileAttributes((PnfsSetFileAttributes)message);
+        } /* fall through because PnfsSetFileAttributes
+             is also postprocessed for locations */
+
         if (message instanceof PoolFileFlushedMessage && message.getReturnCode() == 0) {
             postProcessFlush(envelope, (PoolFileFlushedMessage) message);
         } else if (_cacheModificationRelay != null && message.getReturnCode() == 0) {
@@ -1757,6 +1780,21 @@ public class PnfsManagerV3
         } else if (message.getReplyRequired()) {
             envelope.revertDirection();
             sendMessage(envelope);
+        }
+    }
+
+    private void postProcessSetFileAttributes(PnfsSetFileAttributes message)
+    {
+        FileAttributes attributes = message.getFileAttributes();
+        Optional<AccessLatency> al = attributes.getAccessLatencyIfPresent();
+        Optional<RetentionPolicy> rp = attributes.getRetentionPolicyIfPresent();
+        if (al.isPresent() || rp. isPresent()) {
+            attributes = new FileAttributes();
+            attributes.setAccessLatency(al.orElse(null));
+            attributes.setRetentionPolicy(rp.orElse(null));
+            sendMessage(new CellMessage(_attributesRelay,
+                                        new PnfsSetFileAttributes(message.getPnfsId(),
+                                                                  attributes)));
         }
     }
 
@@ -2198,10 +2236,18 @@ public class PnfsManagerV3
             Activity activity, FsPath path) throws PermissionDeniedCacheException
     {
         if (mask.stream()
-                    .map(PnfsManagerV3::toActivity)
-                    .anyMatch(a -> restriction.isRestricted(a, path))
-                || restriction.isRestricted(activity, path)) {
-            throw new PermissionDeniedCacheException("Permission denied: " + path);
+                .map(PnfsManagerV3::toActivity)
+                .anyMatch(a -> restriction.isRestricted(a, path))) {
+
+            Set<AccessMask> denied = mask.stream()
+                .filter(m -> restriction.isRestricted(toActivity(m), path))
+                .collect(Collectors.toSet());
+
+            throw new PermissionDeniedCacheException("Restriction " + restriction + " denied access for " + denied + " on " + path);
+        }
+
+        if (restriction.isRestricted(activity, path)) {
+            throw new PermissionDeniedCacheException("Restriction " + restriction + " denied activity " + activity + " on " + path);
         }
     }
 }

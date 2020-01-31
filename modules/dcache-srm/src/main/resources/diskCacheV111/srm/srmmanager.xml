@@ -187,7 +187,9 @@
     <!--
          CORE SRM
          =====================================================================================
-      -->
+    -->
+
+    <bean id="srmId" class="org.dcache.srm.SrmIdFactoryBean"/>
 
     <bean id="storage-executor" class="org.dcache.util.CDCExecutorServiceDecorator"
           destroy-method="shutdown">
@@ -218,6 +220,7 @@
         <property name="useCustomGetHostByAddress"
                   value="${srmmanager.enable.custom-get-host-by-address}"/>
         <property name="configuration" ref="config"/>
+        <property name="root" value="${srmmanager.root}"/>
         <property name="pinOnlineFiles" value="${srmmanager.enable.pin-online-files}"/>
         <property name="srmPutNotSupportedProtocols" value="${srmmanager.protocols.disallowed.put}"/>
         <property name="srmGetNotSupportedProtocols" value="${srmmanager.protocols.disallowed.get}"/>
@@ -256,7 +259,6 @@
                      SECONDS.convert(
                      ${srmmanager.service.gplazma.cache.timeout},
                      '${srmmanager.service.gplazma.cache.timeout.unit}')}" />
-        <property name="srm_root" value="${srmmanager.root}"/>
         <property name="buffer_size" value="${srmmanager.limits.transfer-buffer.size}"/>
         <property name="tcp_buffer_size" value="${srmmanager.limits.transfer-tcp-buffer.size}"/>
         <property name="parallel_streams" value="${srmmanager.limits.parallel-streams}"/>
@@ -570,8 +572,9 @@
         <property name="srmManagerStub" ref="srm-manager-stub"/>
         <property name="expiredJobCheckPeriod"
                   value="#{T(java.util.concurrent.TimeUnit).MILLISECONDS.convert(
-			 ${srmmanager.expired-job-period},
-			 '${srmmanager.expired-job-period.unit}')}"/>
+                         ${srmmanager.expired-job-period},
+                         '${srmmanager.expired-job-period.unit}')}"/>
+        <property name="srmId" ref="srmId"/>
     </bean>
 
     <bean id="srm-cli" class="org.dcache.srm.SrmCommandLineInterface">
@@ -584,6 +587,7 @@
         <property name="storage" ref="storage"/>
         <property name="requestCredentialStorage" ref="srm-credential-store"/>
         <property name="srm" ref="srm"/>
+        <property name="srmId" ref="srmId"/>
     </bean>
 
     <bean id="delegationService" class="org.dcache.gridsite.DelegationService">

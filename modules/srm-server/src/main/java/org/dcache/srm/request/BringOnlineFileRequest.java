@@ -79,10 +79,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-
-import diskCacheV111.srm.RequestFileStatus;
 
 import org.dcache.srm.AbstractStorageElement;
 import org.dcache.srm.FileMetaData;
@@ -99,7 +98,6 @@ import org.dcache.srm.scheduler.Scheduler;
 import org.dcache.srm.scheduler.State;
 import org.dcache.srm.v2_2.TBringOnlineRequestFileStatus;
 import org.dcache.srm.v2_2.TReturnStatus;
-import org.dcache.srm.v2_2.TSURLReturnStatus;
 import org.dcache.srm.v2_2.TStatusCode;
 
 /**
@@ -120,6 +118,7 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
     private String pinId;
     private String fileId;
     private transient FileMetaData fileMetaData;
+    private Optional<String> lastPinFailure = Optional.empty();
 
     /** Creates new FileRequest */
     public BringOnlineFileRequest(long requestId, URI surl, long lifetime)
@@ -175,7 +174,7 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
         }
     }
 
-    public void setPinId(String pinId) {
+    private void setPinId(String pinId) {
         wlock();
         try {
             this.pinId = pinId;
@@ -193,7 +192,7 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
         }
     }
 
-    public boolean isPinned() {
+    private boolean isPinned() {
         rlock();
         try {
             return getPinId() != null;
@@ -222,7 +221,7 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
     }
 
 
-    public TBringOnlineRequestFileStatus getTGetRequestFileStatus()
+    protected TBringOnlineRequestFileStatus getTGetRequestFileStatus()
             throws SRMInvalidRequestException
     {
         TBringOnlineRequestFileStatus fileStatus = new TBringOnlineRequestFileStatus();
@@ -245,16 +244,6 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
         fileStatus.setStatus(getReturnStatus());
 
         return fileStatus;
-    }
-
-    public TSURLReturnStatus  getTSURLReturnStatus() throws SRMInvalidRequestException
-    {
-        try {
-            return new TSURLReturnStatus(new org.apache.axis.types.URI(getSurlString()), getReturnStatus());
-        } catch (org.apache.axis.types.URI.MalformedURIException e) {
-            LOGGER.error(e.toString());
-            throw new SRMInvalidRequestException("wrong surl format");
-        }
     }
 
     @Override
@@ -293,33 +282,29 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
                 throw new SRMFileBusyException("The requested SURL is locked by an upload.");
             }
 
-            addHistoryEvent("Pinning file.");
+            if (lastPinFailure.isPresent()) {
+                addHistoryEvent("Retrying to pin file, previous attempt failed with " + lastPinFailure.get());
+                lastPinFailure = Optional.empty();
+            } else {
+                addHistoryEvent("Pinning file.");
+            }
             pinFile(getContainerRequest());
         }
     }
 
 
     @Override
-    protected void onSrmRestartForActiveJob(Scheduler scheduler)
-            throws IllegalStateTransition
+    protected void onSrmRestartForActiveJob() throws IllegalStateTransition
     {
         State state = getState();
 
-        switch (state) {
-        case INPROGRESS:
-            addHistoryEvent("Rescheduled after SRM service restart.");
-            scheduler.queue(this);
-            break;
-
-        // All other states are invalid.
-        default:
+        if (state != State.INPROGRESS) {
             setState(State.FAILED, "Invalid state (" + state + ") detected " +
                     "after SRM service restart");
-            break;
         }
     }
 
-    public void pinFile(BringOnlineRequest request)
+    private void pinFile(BringOnlineRequest request)
     {
         long desiredPinLifetime = request.getDesiredOnlineLifetimeInSeconds();
         if (desiredPinLifetime != -1) {
@@ -333,16 +318,18 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
                         surl,
                         request.getClient_host(),
                         desiredPinLifetime,
-                        String.valueOf(getRequestId()));
+                        String.valueOf(getRequestId()),
+                        true);
         LOGGER.debug("BringOnlineFileRequest: waiting async notification about pinId...");
         future.addListener(new ThePinCallbacks(getId(), future), MoreExecutors.directExecutor());
     }
 
     @Override
-    protected void stateChanged(State oldState) {
-        State state = getState();
+    protected void processStateChange(State newState, String description)
+    {
+        State oldState = getState();
         LOGGER.debug("State changed from {} to {}", oldState, getState());
-        switch (state) {
+        switch (newState) {
         case READY:
             try {
                 getContainerRequest().resetRetryDeltaTime();
@@ -376,7 +363,8 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
             }
             break;
         }
-        super.stateChanged(oldState);
+
+        super.processStateChange(newState, description);
     }
 
     @Override
@@ -432,9 +420,9 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
     }
 
     @Override
-    public TReturnStatus getReturnStatus()
+    protected TReturnStatus getReturnStatus()
     {
-        String description = getLastJobChange().getDescription();
+        String description = latestHistoryEvent();
         TStatusCode statusCode = getStatusCode();
         if (statusCode != null) {
             if (statusCode == TStatusCode.SRM_FILE_PINNED ||
@@ -543,7 +531,9 @@ public final class BringOnlineFileRequest extends FileRequest<BringOnlineRequest
                     }
                 } catch (SRMInternalErrorException e) {
                     if (!fr.getState().isFinal()) {
-                        Scheduler.getScheduler(fr.getSchedulerId()).execute(fr);
+                        fr.lastPinFailure = Optional.of(e.getMessage());
+                        Scheduler.getScheduler(fr.getSchedulerId()).schedule(fr,
+                                1, TimeUnit.SECONDS);
                     }
                 } catch (SRMException e) {
                     fr.setStateAndStatusCode(

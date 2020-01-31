@@ -81,8 +81,6 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.util.Objects;
 
-import diskCacheV111.srm.RequestFileStatus;
-
 import org.dcache.srm.CopyCallbacks;
 import org.dcache.srm.FileMetaData;
 import org.dcache.srm.SRMException;
@@ -204,14 +202,9 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
         return credentialId;
     }
 
-    public void done()
+    private void done()
     {
         LOGGER.debug("done");
-    }
-
-    public void error()
-    {
-        done();
     }
 
     public ImmutableMap<String,String> getExtraInfo()
@@ -235,7 +228,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     /**
      * Set the source location; implies the source is remote.
      */
-    public void setSourceTurl(URI location)
+    protected void setSourceTurl(URI location)
     {
         wlock();
         try {
@@ -261,7 +254,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     /**
      * Set the destination location; implies the source is remote.
      */
-    public void setDestinationTurl(URI location)
+    protected void setDestinationTurl(URI location)
     {
         wlock();
         try {
@@ -287,7 +280,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     /** Setter for property size.
      * @param size New value of property size.
      */
-    public void setSize(long size)
+    protected void setSize(long size)
     {
         rlock();
         try {
@@ -358,7 +351,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     /**
      * Set the absolute path of source; implies the source is local.
      */
-    public void setLocalSourcePath(String path)
+    protected void setLocalSourcePath(String path)
     {
         wlock();
         try {
@@ -384,7 +377,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     /**
      * Set the absolute path of destination; implies the destination is local.
      */
-    public void setLocalDestinationPath(String path)
+    protected void setLocalDestinationPath(String path)
     {
         wlock();
         try {
@@ -398,7 +391,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
      * @return Value of property toFileId.
      *
      */
-    public String getDestinationFileId()
+    private String getDestinationFileId()
     {
         rlock();
         try {
@@ -412,7 +405,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
      * @param id New value of property toFileId.
      *
      */
-    public void setDestinationFileId(String id)
+    private void setDestinationFileId(String id)
     {
         wlock();
         try {
@@ -596,11 +589,10 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     }
 
     @Override
-    protected void stateChanged(State oldState)
+    protected void processStateChange(State newState, String description)
     {
-        State state = getState();
-        if (state.isFinal()) {
-            if (getTransferId() != null && state != State.DONE) {
+        if (newState.isFinal()) {
+            if (getTransferId() != null && newState != State.DONE) {
                 getStorage().killRemoteTransfer(getTransferId());
                 String toFileId = getDestinationFileId();
                 if (toFileId != null) {
@@ -622,6 +614,8 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
                 }
             }
         }
+
+        super.processStateChange(newState, description);
     }
 
     @Override
@@ -630,7 +624,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
         return surl.equals(getSourceSurl()) || surl.equals(getDestinationSurl());
     }
 
-    public void remoteFileRequestDone(URI SURL,String remoteRequestId,String remoteFileId)
+    private void remoteFileRequestDone(URI SURL,String remoteRequestId,String remoteFileId)
     {
         try {
             LOGGER.debug("setting remote file status to Done, SURL={} " +
@@ -691,7 +685,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
      * Setter for property remoteRequestId.
      * @param remoteRequestId New value of property remoteRequestId.
      */
-    public void setRemoteRequestId(String remoteRequestId)
+    protected void setRemoteRequestId(String remoteRequestId)
     {
         wlock();
         try {
@@ -704,7 +698,7 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
      * Setter for property remoteFileId.
      * @param remoteFileId New value of property remoteFileId.
      */
-    public void setRemoteFileId(String remoteFileId)
+    protected void setRemoteFileId(String remoteFileId)
     {
         wlock();
         try {
@@ -878,9 +872,9 @@ public final class CopyFileRequest extends FileRequest<CopyRequest> implements D
     }
 
     @Override
-    public TReturnStatus getReturnStatus()
+    protected TReturnStatus getReturnStatus()
     {
-        String description = getLastJobChange().getDescription();
+        String description = latestHistoryEvent();
         TStatusCode statusCode = getStatusCode();
         if (statusCode != null) {
             return new TReturnStatus(statusCode, description);

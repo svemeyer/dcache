@@ -77,8 +77,6 @@ import javax.annotation.Nullable;
 import java.net.URI;
 import java.util.Objects;
 
-import diskCacheV111.srm.RequestFileStatus;
-
 import org.dcache.srm.SRM;
 import org.dcache.srm.SRMAuthorizationException;
 import org.dcache.srm.SRMDuplicationException;
@@ -98,6 +96,7 @@ import org.dcache.srm.v2_2.TStatusCode;
 
 public final class PutFileRequest extends FileRequest<PutRequest> {
     private static final Logger LOGGER = LoggerFactory.getLogger(PutFileRequest.class);
+
     private final URI surl;
     private final Long size;
     private URI turl;
@@ -183,7 +182,7 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
         }
     }
 
-    public final void setFileId(String fileId) {
+    protected final void setFileId(String fileId) {
         wlock();
         try {
             this.fileId = fileId;
@@ -218,7 +217,7 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
         return null;
     }
 
-    public TPutRequestFileStatus getTPutRequestFileStatus()
+    protected TPutRequestFileStatus getTPutRequestFileStatus()
             throws SRMInvalidRequestException {
         TPutRequestFileStatus fileStatus = new TPutRequestFileStatus();
         fileStatus.setFileSize(((getSize() == null) ? null : new UnsignedLong(getSize())));
@@ -347,10 +346,11 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
 
 
     @Override
-    protected void stateChanged(State oldState) {
-        State state = getState();
-        LOGGER.debug("State changed from {} to {}", oldState, getState());
-        if(state == State.READY) {
+    protected void processStateChange(State newState, String description)
+    {
+        State oldState = getState();
+        LOGGER.debug("State changed from {} to {}", oldState, newState);
+        if (newState == State.READY) {
             try {
                 getContainerRequest().resetRetryDeltaTime();
             } catch (SRMInvalidRequestException ire) {
@@ -358,14 +358,14 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
             }
         }
         try {
-            if (state == State.FAILED && getFileId() != null) {
-                String reason = getLastJobChange().getDescription();
-                getStorage().abortPut(getUser(), getFileId(), getSurl(), reason);
+            if (newState == State.FAILED && getFileId() != null) {
+                getStorage().abortPut(getUser(), getFileId(), getSurl(), description);
             }
         } catch (SRMException e) {
             LOGGER.error("Failed to abort put after failure: {}", e.getMessage());
         }
-        super.stateChanged(oldState);
+
+        super.processStateChange(newState, description);
     }
 
     private void computeTurl() throws SRMException
@@ -447,7 +447,7 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
                 return new TReturnStatus(TStatusCode.SRM_ABORTED, "The SURL has been aborted.");
             case FAILED:
                 TStatusCode statusCode = getStatusCode();
-                String description = getLastJobChange().getDescription();
+                String description = latestHistoryEvent();
                 if (statusCode != null) {
                     return new TReturnStatus(statusCode, description);
                 }
@@ -460,16 +460,6 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
             return new TReturnStatus(TStatusCode.SRM_FAILURE, "Scheduling failure.");
         } finally {
             wunlock();
-        }
-    }
-
-    @Override
-    public void setStatus(SRMUser user, String status) throws SRMException
-    {
-        if (status.equalsIgnoreCase("Done")) {
-            done(user);
-        } else {
-            super.setStatus(user, status);
         }
     }
 
@@ -489,9 +479,9 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
     }
 
     @Override
-    public TReturnStatus getReturnStatus()
+    protected TReturnStatus getReturnStatus()
     {
-        String description = getLastJobChange().getDescription();
+        String description = latestHistoryEvent();
         TStatusCode statusCode = getStatusCode();
         if (statusCode != null) {
             if (statusCode == TStatusCode.SRM_SUCCESS || statusCode == TStatusCode.SRM_SPACE_AVAILABLE) {
@@ -516,18 +506,6 @@ public final class PutFileRequest extends FileRequest<PutRequest> {
             return new TReturnStatus(TStatusCode.SRM_FAILURE, description);
         default:
             return new TReturnStatus(TStatusCode.SRM_REQUEST_INPROGRESS, description);
-        }
-    }
-
-    /**
-     * @return the aTurl
-     */
-    public final URI getTurl() {
-        rlock();
-        try {
-            return turl;
-        } finally {
-            runlock();
         }
     }
 

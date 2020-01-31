@@ -65,13 +65,13 @@ COPYRIGHT STATUS:
  */
 package org.dcache.srm.request;
 
-import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.transaction.TransactionException;
 
 import javax.annotation.Nonnull;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -79,6 +79,8 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -98,6 +100,7 @@ import org.dcache.srm.v2_2.TStatusCode;
 import org.dcache.util.TimeUtils;
 import org.dcache.util.TimeUtils.TimeUnitFormat;
 
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 
@@ -110,12 +113,10 @@ public abstract class Job  {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Job.class);
 
-    protected static final String TIMESTAMP_FORMAT = "yyyy-MM-dd' 'HH:mm:ss.SSS";
-
     //this is used to build the queue of jobs.
     protected Long nextJobId;
 
-    protected final long id;
+    private final long id;
 
     /**
      * Status code from version 2.2
@@ -128,12 +129,12 @@ public abstract class Job  {
     private volatile State state = State.UNSCHEDULED;
 
     protected String schedulerId;
-    protected long schedulerTimeStamp;
+    private long schedulerTimeStamp;
 
 
     protected final long creationTime;
 
-    protected long lifetime;
+    private long lifetime;
 
     private long lastStateTransitionTime = System.currentTimeMillis();
 
@@ -146,6 +147,8 @@ public abstract class Job  {
 
     private final ReentrantReadWriteLock lock =
             new ReentrantReadWriteLock();
+
+    private final List<JobStateChangeAware> stateChangeListeners = new CopyOnWriteArrayList<>();
 
     // this constructor is used for restoring the job from permanent storage
     // should be called through the Job.getJob only, otherwise the expireRestoredJobOrCreateExperationTimer
@@ -193,7 +196,28 @@ public abstract class Job  {
         jobHistory.add(new JobHistory(nextLong(), state, "Request created", lastStateTransitionTime));
     }
 
-    protected JobStorage<Job> getJobStorage() {
+    /**
+     * Subscribe listener to learn about changes to this Job's state.
+     * The listener's method is called while the Job's read lock is acquired.
+     * @param listener the object to be notified
+     */
+    public void subscribe(JobStateChangeAware listener)
+    {
+        stateChangeListeners.add(listener);
+    }
+
+    /**
+     * No longer receive notification about state changes.
+     * It is safe to call this method from a JobStateChangeAware method.
+     * @param listener the object that should not receive further notification.
+     * @return true if listener was already subscribed.
+     */
+    public boolean unsubscribe(JobStateChangeAware listener)
+    {
+        return stateChangeListeners.remove(listener);
+    }
+
+    private JobStorage<Job> getJobStorage() {
         return JobStorageFactory.getJobStorageFactory().getJobStorage(this);
     }
 
@@ -276,30 +300,68 @@ public abstract class Job  {
             throws IllegalStateTransition
     {
         wlock();
+        boolean isDowngraded = false;
         try {
-            if (newState == this.state) {
-                return;
-            }
-            if (!isValidTransition(this.state, newState)) {
-                throw new IllegalStateTransition(
-                        "Illegal state transition from " + this.state + " to " + newState,
-                        this.state, newState);
-            }
-            State oldState = this.state;
-            this.state = newState;
-            lastStateTransitionTime = System.currentTimeMillis();
+            State oldState = state;
+            try {
+                if (newState == state) {
+                    return;
+                }
+                if (!isValidTransition(state, newState)) {
+                    throw new IllegalStateTransition(
+                            "Illegal state transition from " + state + " to " + newState,
+                            state, newState);
+                }
+                processStateChange(newState, description);
+                saveJob(state == State.RQUEUED);
 
-            jobHistory.add( new JobHistory(nextLong(),newState,description,lastStateTransitionTime));
-
-            notifySchedulerOfStateChange(oldState, newState);
-
-            if (!newState.isFinal() && schedulerId == null) {
-                throw new IllegalStateTransition("Scheduler ID is null");
+                // Downgrade from write lock to read lock
+                rlock();
+                isDowngraded = true;
+            } finally {
+                wunlock();
             }
-            stateChanged(oldState);
-            saveJob(state == State.RQUEUED);
+
+            notifyListeners(oldState, description);
         } finally {
-            wunlock();
+            if (isDowngraded) {
+                runlock();
+            }
+        }
+    }
+
+    /**
+     * Job-internal processing of a state change. Subclasses should override
+     * this method to do any internal processing.  When this method returns,
+     * the Job object is fully updated based on this state change.
+     */
+    @GuardedBy("lock")
+    protected void processStateChange(State newState, String description)
+    {
+        this.state = newState;
+        lastStateTransitionTime = System.currentTimeMillis();
+
+        jobHistory.add( new JobHistory(nextLong(),newState,description,lastStateTransitionTime));
+
+        checkState(newState.isFinal() || schedulerId != null,
+                "Scheduler ID is null");
+    }
+
+    /**
+     * Notify all subscribers that the job's state has changed.  This method
+     * must only be called with the current thread has obtained either read- or
+     * write-lock.  Obtaining the read-lock is preferred, as this promotes
+     * concurrency.
+     */
+    @GuardedBy("lock")
+    private void notifyListeners(State oldState, String description)
+    {
+        for (JobStateChangeAware listener : stateChangeListeners) {
+            try {
+                listener.jobStateChanged(this, oldState, description);
+            } catch (RuntimeException e) {
+                LOGGER.error("Bug found: please report to support@dcache.org", e);
+            }
         }
     }
 
@@ -371,6 +433,7 @@ public abstract class Job  {
      * <p/>
      * See {@link #addHistoryEvent(java.lang.String) }
      */
+    @Nonnull
     public String latestHistoryEvent() {
         rlock();
         try {
@@ -385,7 +448,7 @@ public abstract class Job  {
        }
     }
 
-    public void addHistoryEvent(String description){
+    protected void addHistoryEvent(String description){
         wlock();
         try {
             jobHistory.add(new JobHistory(nextLong(), state, description, System.currentTimeMillis()));
@@ -395,11 +458,7 @@ public abstract class Job  {
 
     }
 
-     public CharSequence getHistory() {
-         return getHistory("");
-     }
-
-     public CharSequence getHistory(String padding) {
+     protected CharSequence getHistory(String padding) {
         StringBuilder historyStringBuillder = new StringBuilder();
         long previousTransitionTime = 0;
         State previousTransitionState = State.UNSCHEDULED;
@@ -450,23 +509,7 @@ public abstract class Job  {
         }
     }
 
-    @Nonnull
-    public JobHistory getLastJobChange()
-    {
-        rlock();
-        try {
-            return Iterables.getLast(jobHistory);
-        } finally {
-            runlock();
-        }
-    }
-
     public abstract void run() throws SRMException, IllegalStateTransition;
-
-    //implementation should not block in this method
-    // this method should make sure that the job is saved in the
-    // job's storage (instance of Jon.JobStorage (possibly in a database )
-    protected abstract void stateChanged(State oldState);
 
     public TStatusCode getStatusCode() {
         rlock();
@@ -477,7 +520,7 @@ public abstract class Job  {
         }
     }
 
-    public void setStatusCode(TStatusCode statusCode) {
+    protected void setStatusCode(TStatusCode statusCode) {
         wlock();
         try {
             this.statusCode = statusCode;
@@ -528,20 +571,6 @@ public abstract class Job  {
         }
     }
 
-    /** Setter for property nextJobId.
-     * @param nextJobId New value of property nextJobId.
-     *
-     */
-    public void setNextJobId(Long nextJobId) {
-        wlock();
-        try {
-            this.nextJobId = nextJobId;
-            saveJob();
-        } finally {
-            wunlock();
-        }
-    }
-
     /** Getter for property schedulerId.
      * @return Value of property schedulerId.
      *
@@ -555,21 +584,18 @@ public abstract class Job  {
         }
     }
 
-    /** Setter for property schedulerId.
-     * @param schedulerId New value of property schedulerId.
-     *
+    /**
+     * Associate this job with the supplied scheduler.
      */
-    public void setScheduler(String schedulerId,long schedulerTimeStamp) {
+    private void setScheduler(Scheduler scheduler) {
         wlock() ;
         try {
             //  check if the values have indeed changed
             // If they are the same, we do not need to do anythign.
-            if(this.schedulerTimeStamp != schedulerTimeStamp ||
-               this.schedulerId != null && schedulerId == null ||
-               schedulerId != null && !schedulerId.equals(this.schedulerId)) {
-
-                this.schedulerTimeStamp = schedulerTimeStamp;
-                this.schedulerId = schedulerId;
+            if (schedulerTimeStamp != scheduler.getTimestamp()
+                    || !Objects.equals(schedulerId, scheduler.getId())) {
+                schedulerTimeStamp = scheduler.getTimestamp();
+                schedulerId = scheduler.getId();
 
                 // we need to save job every time the scheduler is set
                 // even if the jbbc monitoring log is disabled,
@@ -698,7 +724,7 @@ public abstract class Job  {
         }
     }
 
-    public long getRemainingLifetime() {
+    protected long getRemainingLifetime() {
         rlock();
         try {
             if (state.isFinal()) {
@@ -711,7 +737,7 @@ public abstract class Job  {
         }
     }
 
-    public int getRemainingLifetimeIn(TimeUnit unit) {
+    protected int getRemainingLifetimeIn(TimeUnit unit) {
         return (int) Math.min(unit.convert(getRemainingLifetime(), TimeUnit.MILLISECONDS), Integer.MAX_VALUE);
     }
 
@@ -836,39 +862,19 @@ public abstract class Job  {
     /**
      * This is the initial call to schedule the job for execution
      */
-    public void scheduleWith(Scheduler scheduler) throws InterruptedException,
-            IllegalStateTransition
+    public void scheduleWith(Scheduler scheduler) throws IllegalStateTransition
     {
         wlock();
-        try{
-            if(state != State.UNSCHEDULED) {
+        try {
+            if (state != State.UNSCHEDULED) {
                 throw new IllegalStateException("Job " +
-                        getClass().getSimpleName() + " [" + this.getId() +
-                        "] has state " + state + "(not UNSCHEDULED)");
+                        getClass().getSimpleName() + " [" + id +
+                        "] has state " + state + " (not UNSCHEDULED)");
             }
-            setScheduler(scheduler.getId(), scheduler.getTimestamp());
+            setScheduler(scheduler);
             scheduler.queue(this);
         } finally {
             wunlock();
-        }
-    }
-
-    /**
-     * Notifies the scheduler of the this job of a  change
-     * of the state from old to new
-     * @param oldState
-     * @param newState
-     */
-    private void notifySchedulerOfStateChange(State oldState, State newState) {
-         if (schedulerId != null) {
-            Scheduler scheduler = Scheduler.getScheduler(schedulerId);
-            if (scheduler != null) {
-                LOGGER.debug("notifySchedulerOfStateChange calls scheduler.stateChanged()");
-                scheduler.stateChanged(this, oldState, newState);
-                if (state.isFinal()) {
-                    schedulerId = null;
-                }
-            }
         }
     }
 
@@ -916,8 +922,8 @@ public abstract class Job  {
                 return;
             }
 
-            setScheduler(scheduler.getId(), scheduler.getTimestamp());
-            notifySchedulerOfStateChange(State.RESTORED, state);
+            setScheduler(scheduler);
+            notifyListeners(State.RESTORED, "Restored from database.");
 
             if (shouldFailJobs) {
                 setState(State.FAILED, "Aborted due to SRM service restart.");
@@ -929,45 +935,37 @@ public abstract class Job  {
                 return;
             }
 
-            switch (state) {
-            // Unscheduled or queued jobs were never worked on before the SRM restart; we
-            // simply queue them now.
-            case UNSCHEDULED:
-            case QUEUED:
-                addHistoryEvent("Restored from database.");
-                scheduler.queue(this);
-                break;
-
-            // Jobs in RQUEUED, READY or TRANSFERRING states require no further
-            // processing. We can leave them for the client to discover the TURL
-            // or place the job into the DONE state, respectively.
-            case RQUEUED:
-            case READY:
-            case TRANSFERRING:
-                break;
-
-            // Other job states need request-specific recovery process.
-            default:
-                onSrmRestartForActiveJob(scheduler);
-                break;
+            if (state == State.INPROGRESS) {
+                onSrmRestartForActiveJob();
             }
+
+            if (state.isFinal()) {
+                return;
+            }
+
+            addHistoryEvent("Restored from database.");
+            scheduler.inherit(this);
         } catch (IllegalStateTransition e) {
             LOGGER.error("Failed to restore job: {}", e.getMessage());
         } finally {
             wunlock();
         }
+
     }
 
     /**
      * Provide request-specific recovery for jobs that were being processed
-     * when SRM was restarted.  This corresponds to jobs in state INPROGRESS.
-     *
-     * In general, such jobs require some request-specific procedure.
-     * Subclasses are expected to override this method to provide this
-     * procedure.
+     * when SRM was stopped.  This corresponds to jobs in the
+     * {@literal INPROGRESS} state.
+     * <p>
+     * If dCache is able to recover an active Job then this method will do any
+     * necessary activity and leaves the Job in the {@literal INPROGRESS} state.
+     * The Job will be schedule after this method returns.
+     * <p>
+     * If dCache is unable to recover an active job then this method should
+     * simply set the state to {@literal State.FAILED}.
      */
-    protected void onSrmRestartForActiveJob(Scheduler scheduler)
-            throws IllegalStateTransition
+    protected void onSrmRestartForActiveJob() throws IllegalStateTransition
     {
         // By default, simply fail such requests.
         setState(State.FAILED, "Aborted due to SRM service restart.");

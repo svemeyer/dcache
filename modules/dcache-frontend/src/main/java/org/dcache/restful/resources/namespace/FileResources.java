@@ -43,7 +43,6 @@ import java.util.List;
 import java.util.Set;
 
 import diskCacheV111.util.CacheException;
-import diskCacheV111.util.FileLocality;
 import diskCacheV111.util.FileNotFoundCacheException;
 import diskCacheV111.util.FsPath;
 import diskCacheV111.util.PermissionDeniedCacheException;
@@ -56,10 +55,8 @@ import org.dcache.http.PathMapper;
 import org.dcache.namespace.FileAttribute;
 import org.dcache.namespace.FileType;
 import org.dcache.poolmanager.PoolMonitor;
-import org.dcache.restful.policyengine.MigrationPolicyEngine;
+import org.dcache.qos.QoSTransitionEngine;
 import org.dcache.restful.providers.JsonFileAttributes;
-import org.dcache.restful.qos.QosManagement;
-import org.dcache.restful.qos.QosManagementNamespace;
 import org.dcache.restful.util.HandlerBuilders;
 import org.dcache.restful.util.HttpServletRequests;
 import org.dcache.restful.util.RequestUser;
@@ -69,8 +66,6 @@ import org.dcache.util.list.DirectoryStream;
 import org.dcache.util.list.ListDirectoryHandler;
 import org.dcache.vehicles.FileAttributes;
 
-import static diskCacheV111.util.FileLocality.NEARLINE;
-import static diskCacheV111.util.FileLocality.ONLINE_AND_NEARLINE;
 import static org.dcache.restful.providers.SuccessfulResponse.successfulResponse;
 
 /**
@@ -83,8 +78,9 @@ public class FileResources {
     private static final Logger LOG = LoggerFactory.getLogger(FileResources.class);
 
     /*
-    This "request" parameter is used to get fully qualified name of the client
-     * or the last proxy that sent the request. Later used for quering locality of the file.
+     * Used to get fully qualified name of the client
+     * or the last proxy that sent the request.
+     * Later used for querying locality of the file.
      */
     @Context
     private HttpServletRequest request;
@@ -270,73 +266,31 @@ public class FileResources {
         try {
             JSONObject reqPayload = new JSONObject(requestPayload);
             String action = (String) reqPayload.get("action");
-            PnfsHandler handler = HandlerBuilders.roleAwarePnfsHandler(pnfsmanager);
+            PnfsHandler pnfsHandler = HandlerBuilders.roleAwarePnfsHandler(pnfsmanager);
             FsPath path = pathMapper.asDcachePath(request, requestPath, ForbiddenException::new);
-
-            // FIXME: which attributes do we actually need?
-            FileAttributes attributes = handler.getFileAttributes(path, EnumSet.allOf(FileAttribute.class));
-
+            FileAttributes attributes
+                            = pnfsHandler.getFileAttributes(path,
+                                                            EnumSet.allOf(FileAttribute.class));
             switch (action) {
                 case "mkdir":
                     String name = (String) reqPayload.get("name");
                     FsPath.checkChildName(name, BadRequestException::new);
-                    handler = HandlerBuilders.pnfsHandler(pnfsmanager); // FIXME: non-role identity to ensure correct ownership
-                    handler.createPnfsDirectory(path.child(name).toString());
+                    pnfsHandler = HandlerBuilders.pnfsHandler(pnfsmanager); // FIXME: non-role identity to ensure correct ownership
+                    pnfsHandler.createPnfsDirectory(path.child(name).toString());
                     break;
-
                 case "mv":
                     String dest = (String) reqPayload.get("destination");
                     FsPath target = pathMapper.resolve(request, path, dest);
-                    handler.renameEntry(path.toString(), target.toString(), true);
+                    pnfsHandler.renameEntry(path.toString(), target.toString(), true);
                     break;
-
                 case "qos":
                     String targetQos = reqPayload.getString("target");
-                    JsonFileAttributes fileAttributes = new JsonFileAttributes();
-                    NamespaceUtils.addQoSAttributes(fileAttributes, attributes, request, poolMonitor, pinmanager);
-                    LOG.debug("Request received to change current QoS from {} to: {} for {}", fileAttributes.currentQos, targetQos, path);
-                    FileLocality locality = poolMonitor.getFileLocality(attributes, request.getRemoteHost());
-                    LOG.debug("The Locality of the file: {}", locality);
-                    if (locality == FileLocality.NONE) {
-                        throw new BadRequestException("Transition for directories not supported");
-                    }
-
-                    MigrationPolicyEngine migrationPolicyEngine =
-                            new MigrationPolicyEngine(attributes, poolmanager, poolMonitor);
-
-                    switch (targetQos) {
-                    case QosManagement.DISK_TAPE:
-                        if (locality != NEARLINE && locality != ONLINE_AND_NEARLINE) {
-                            migrationPolicyEngine.adjust();
-                        }
-                        if (!QosManagementNamespace.isPinnedForQoS(attributes, pinmanager)) {
-                            QosManagementNamespace.pinForQoS(request, attributes, pinmanager);
-                        }
-                        break;
-                    case QosManagement.DISK:
-                        switch (locality) {
-                        case ONLINE:
-                            // do nothing
-                            break;
-
-                        default:
-                            throw new BadRequestException("Unsupported QoS transition");
-                        }
-                        break;
-                    case QosManagement.TAPE:
-                        if (locality != NEARLINE && locality != ONLINE_AND_NEARLINE) {
-                            migrationPolicyEngine.adjust();
-                        }
-                        QosManagementNamespace.unpinForQoS(attributes, pinmanager);
-                        break;
-
-                    default:
-                        throw new BadRequestException("Unknown target QoS: " + targetQos);
-                    }
-                    break;
-
-                default:
-                    throw new BadRequestException("Unknown action: " + action);
+                    new QoSTransitionEngine(poolmanager,
+                                            poolMonitor,
+                                            pnfsHandler,
+                                            pinmanager)
+                                    .adjustQoS(path, attributes,
+                                               targetQos, request.getRemoteHost());
             }
         } catch (FileNotFoundCacheException e) {
             throw new NotFoundException(e);
@@ -346,8 +300,12 @@ public class FileResources {
             } else {
                 throw new ForbiddenException(e);
             }
-        } catch (URISyntaxException | JSONException | CacheException
-                        | InterruptedException | NoRouteToCellException e) {
+        } catch (UnsupportedOperationException |
+                        URISyntaxException |
+                        JSONException |
+                        CacheException |
+                        InterruptedException |
+                        NoRouteToCellException e) {
             throw new BadRequestException(e.getMessage(), e);
         }
         return successfulResponse(Response.Status.CREATED);

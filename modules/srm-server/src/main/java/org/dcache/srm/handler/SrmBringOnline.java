@@ -94,7 +94,9 @@ public class SrmBringOnline
         }
 
         BringOnlineRequest r =
-                new BringOnlineRequest(user,
+                new BringOnlineRequest(
+                        srm.getSrmId(),
+                        user,
                         surls,
                         protocols,
                         requestTime,
@@ -103,7 +105,7 @@ public class SrmBringOnline
                         request.getUserRequestDescription(),
                         clientHost);
         try (JDC ignored = r.applyJdc()) {
-            srm.schedule(r);
+            srm.acceptNewJob(r);
             return r.getSrmBringOnlineResponse(configuration.getBringOnlineSwitchToAsynchronousModeDelay());
         } catch (InterruptedException e) {
             throw new SRMInternalErrorException("Operation interrupted", e);
