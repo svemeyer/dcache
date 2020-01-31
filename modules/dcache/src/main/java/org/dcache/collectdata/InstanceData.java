@@ -3,6 +3,7 @@ package org.dcache.collectdata;
 import diskCacheV111.poolManager.CostModule;
 import diskCacheV111.pools.PoolCostInfo;
 import diskCacheV111.vehicles.PoolManagerGetPoolMonitor;
+import dmg.cells.nucleus.CellEndpoint;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.util.Version;
@@ -12,10 +13,16 @@ import org.springframework.beans.factory.annotation.Required;
 
 import java.util.*;
 
+/**
+ * This class contains information about the dCache-instance. These are the storage, version, an ID and a location.
+ * Location and ID are read from the .properties-file, storage and version are collected from dCache itself. This
+ * class is used by SendData.
+ */
+
 public class InstanceData {
     private CellStub poolManagerStub;
-    private String siteid;
 
+    private String siteid;
     private Map<String, Double> location = new HashMap<String, Double>();
     private String version;
     private double storage;
@@ -47,30 +54,10 @@ public class InstanceData {
         this.storage = getStorage();
     }
 
-    @Override
-    public String toString() {
-        String storageUnit = "-";
-        double storageShort = this.storage;
-        if(this.storage < 1000) {
-            storageUnit = "B";
-        }
-        else if((this.storage / 1000) < 1000) {
-            storageUnit = "kB";
-            storageShort = this.storage / 1000;
-        }
-        else if ((this.storage / 1000000) < 1000) {
-            storageShort = this.storage / 1000000;
-            storageUnit = "MB";
-        } else if ((this.storage / 1000000000) < 1000) {
-            storageShort = this.storage / 1000000000;
-            storageUnit = "GB";
-        } else if ((this.storage / 1000000000000L) < 1000) {
-            storageShort = this.storage / 1000000000000L;
-            storageUnit = "TB";
-        }
-        return "Version: " + this.version + "\nLocation: " + this.location + "\nAvailable Storage: " + storageShort +
-                " " + storageUnit;
-    }
+    /**
+     * toJson() transforms the information to a database compliant JSON-format.
+     * @return Information as JSON-formatted String
+     */
 
     public String toJson() {
         return "{\n\t\"version\":\t\"" + this.version + "\",\n\t\"siteid\":\t\"" + this.siteid + "\",\n\t\"location\":\n\t{" +
@@ -87,7 +74,8 @@ public class InstanceData {
         PoolMonitor monitor;
         double space = 0.0;
         try {
-            monitor = poolManagerStub.sendAndWait(new PoolManagerGetPoolMonitor()).getPoolMonitor();
+            monitor = poolManagerStub.sendAndWait(new PoolManagerGetPoolMonitor(), 20000,
+                    CellEndpoint.SendFlag.RETRY_ON_NO_ROUTE_TO_CELL).getPoolMonitor();
             CostModule costModule = monitor.getCostModule();
             Collection<PoolCostInfo> costInfos = costModule.getPoolCostInfos();
 
@@ -97,16 +85,12 @@ public class InstanceData {
             return space;
 
         } catch (Exception e) {
-            LOGGER.error("Error in getStorage: " + e);
+            LOGGER.error("Could not get storage information; set storage to -1.0. This was caused by: " + e);
             return -1.0;
         }
     }
 
-    public String getSiteid() {
-        return this.siteid;
-    }
-
-    public void refreshData() {
+    public void updateData() {
         this.storage = getStorage();
     }
 }

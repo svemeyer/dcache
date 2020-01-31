@@ -1,6 +1,7 @@
 package org.dcache.collectdata;
 
 import dmg.cells.nucleus.CellCommandListener;
+import org.dcache.util.CDCScheduledExecutorServiceDecorator;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
@@ -14,23 +15,44 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.concurrent.*;
 
+/**
+ * This is a cell, that collects information about the dCache-instance and sends it once per hour to a central database.
+ * It captures the version and the storage from dCache directly. The location and a siteid are read from
+ * collectdata.properties.
+ * The location consists of latitude and longitude. It's possible to set the values to 0 to omit the real location.
+ * Sending the information regularly is implemented with a ScheduledExecutor, which executes sendData()
+ * at an interval of one hour.
+ */
+
 public class SendData implements CellCommandListener {
     private static final Logger LOGGER = LoggerFactory.getLogger(SendData.class);
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
+    private String urlStr;
+
+    //self-signed-certificate workaround TODO remove
+    static {
+        HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> hostname.equals("xxxxx"));
+    }
+
+    @Required
+    public void setUrlStr(String url) {
+        this.urlStr = url;
+    }
 
     @Required
     public void setInstanceData(InstanceData instanceData) {
         this.instanceData = instanceData;
     }
 
+
     public SendData() {
-        sendDataExecutor = Executors.newScheduledThreadPool(1);
+        sendDataExecutor = new CDCScheduledExecutorServiceDecorator( Executors.newScheduledThreadPool(1));
     }
 
     public void init() {
-        LOGGER.warn("Sending information about dCache-instance will be activated");
-        ScheduledFuture sendDataExecFuture = sendDataExecutor.scheduleAtFixedRate(this::sendData,
+        LOGGER.warn("Sending information about dCache-instance is activated.");
+        sendDataExecutor.scheduleAtFixedRate(this::sendData,
                 0, 1, TimeUnit.HOURS);
     }
 
@@ -38,33 +60,38 @@ public class SendData implements CellCommandListener {
         sendDataExecutor.shutdown();
     }
 
-    private int sendData() {
-        instanceData.refreshData();
+    /**
+     * sendData() sends the data the information are updated and converted to a JSON-formatted string first.
+     */
+
+    private void sendData() {
+        instanceData.updateData();
 
         String json_body = instanceData.toJson();
         SimpleDateFormat format = new SimpleDateFormat("MM-dd-yyyy");
         URL url;
         HttpsURLConnection conn;
         int response_code = 0;
+
         try {
-            url = new URL("https://xxxxxxxx/collector?date=" + format.format(new Date()));
+            url = new URL(urlStr + "?date=" + format.format(new Date()));
         } catch (MalformedURLException mue) {
-            LOGGER.error("URL is in wrong format.");
-            return 0;
+            LOGGER.error("URL is in wrong format: " + mue);
+            return;
         }
 
         try {
             conn = (HttpsURLConnection) url.openConnection();
         } catch (java.io.IOException ioe) {
-            LOGGER.error("Connection failed");
-            return 0;
+            LOGGER.error("Connection to collector failed: " + ioe);
+            return;
         }
 
         try {
             conn.setRequestMethod("POST");
         } catch (ProtocolException pe) {
-            LOGGER.error("Error with Protocol");
-            return 0;
+            LOGGER.error("Error with Protocol while setting request method: " + pe);
+            return;
         }
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
@@ -77,19 +104,17 @@ public class SendData implements CellCommandListener {
             if (response_code != 200 && response_code != 201) {
                 LOGGER.error("Error sending the data. Response: " + response_code + " " + conn.getResponseMessage());
             } else {
-                LOGGER.warn("Information sent to collector.");
+                LOGGER.info("Information successfully sent to collector");
             }
         } catch (java.io.IOException ioe) {
             LOGGER.error("Error while sending to collector: " + ioe);
-            return 0;
+            return;
         }
 
         try {
             response_code = conn.getResponseCode();
         } catch (java.io.IOException ioe) {
             LOGGER.error("Error getting response code: " + ioe);
-            return 0;
         }
-        return response_code;
     }
 }

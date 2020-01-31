@@ -7,4 +7,5 @@ create org.dcache.cells.UniversalSpringCell "${collectdata.cell.name}" \
     "classpath:org/dcache/collectdata/collectdata.xml \
     -siteid=\"${collectdata.instance.siteid}\" \
     -lat=\"${collectdata.instance.location.lat}\" \
-    -lon=\"${collectdata.instance.location.lon}\""
+    -lon=\"${collectdata.instance.location.lon}\" \
+    -db_url=\"${collectdata.database.url}\""
