@@ -15,16 +15,18 @@
         <property name="timeout" value="30000"/>
     </bean>
 
-    <bean id="sendData" class="org.dcache.collectdata.SendData"
-        init-method="init" destroy-method="shutdown">
-        <property name="instanceData" ref="instance-data"/>
-    </bean>
-
     <bean id="instance-data" class="org.dcache.collectdata.InstanceData" init-method="init">
         <property name="poolManagerStub" ref="poolManagerStub"/>
         <property name="siteid" value="${siteid}"/>
         <property name="lon" value="${lon}"/>
         <property name="lat" value="${lat}"/>
     </bean>
+
+    <bean id="sendData" class="org.dcache.collectdata.SendData"
+        init-method="init" destroy-method="shutdown">
+        <property name="instanceData" ref="instance-data"/>
+        <property name="urlStr" value="${db_url}"/>
+    </bean>
+
 
 </beans>
