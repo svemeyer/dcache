@@ -1,5 +1,6 @@
 package org.dcache.collectdata;
 
+import com.mongodb.util.JSON;
 import diskCacheV111.poolManager.CostModule;
 import diskCacheV111.pools.PoolCostInfo;
 import diskCacheV111.vehicles.PoolManagerGetPoolMonitor;
@@ -7,6 +8,7 @@ import dmg.cells.nucleus.CellEndpoint;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.util.Version;
+import org.json.JSONObject;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
@@ -60,9 +62,17 @@ public class InstanceData {
      */
 
     public String toJson() {
-        return "{\n\t\"version\":\t\"" + this.version + "\",\n\t\"siteid\":\t\"" + this.siteid + "\",\n\t\"location\":\n\t{" +
-                "\n\t\t\"lon\":" + this.location.get("longitude") + ",\n\t\t\"lat\":" + this.location.get("latitude") +
-                "\n\t},\n\t\"storage\":\t" + this.storage + "\n}";
+        JSONObject o = new JSONObject();
+        o.put("version", this.version);
+        o.put("siteid", this.siteid);
+
+
+        JSONObject loc = new JSONObject();
+        loc.put("lon", this.location.get("longitude"));
+        loc.put("lat", this.location.get("latitude"));
+        o.put("location", loc);
+
+        return loc.toString();
     }
 
     private String getVersion() {
