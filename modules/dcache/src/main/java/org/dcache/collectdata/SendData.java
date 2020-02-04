@@ -26,6 +26,7 @@ import java.util.concurrent.*;
 
 public class SendData implements CellCommandListener {
     private static final Logger _log = LoggerFactory.getLogger(SendData.class);
+
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private String urlStr;
