@@ -64,14 +64,14 @@ public class InstanceData {
         JSONObject o = new JSONObject();
         o.put("version", this.version);
         o.put("siteid", this.siteid);
-
+        o.put("storage", this.storage);
 
         JSONObject loc = new JSONObject();
         loc.put("lon", this.location.get("longitude"));
         loc.put("lat", this.location.get("latitude"));
         o.put("location", loc);
 
-        return loc.toString();
+        return o.toString();
     }
 
     private String getVersion() {
