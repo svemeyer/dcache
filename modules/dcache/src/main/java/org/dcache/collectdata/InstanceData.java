@@ -1,9 +1,5 @@
 package org.dcache.collectdata;
 
-<<<<<<< HEAD
-import com.mongodb.util.JSON;
-=======
->>>>>>> 5495663bd6687186394bfa70303356ef2048d57f
 import diskCacheV111.poolManager.CostModule;
 import diskCacheV111.pools.PoolCostInfo;
 import diskCacheV111.vehicles.PoolManagerGetPoolMonitor;
@@ -11,10 +7,7 @@ import dmg.cells.nucleus.CellEndpoint;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.util.Version;
-<<<<<<< HEAD
 import org.json.JSONObject;
-=======
->>>>>>> 5495663bd6687186394bfa70303356ef2048d57f
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
