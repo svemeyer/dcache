@@ -25,7 +25,7 @@ import java.util.concurrent.*;
  */
 
 public class SendData implements CellCommandListener {
-    private static final Logger LOGGER = LoggerFactory.getLogger(SendData.class);
+    private static final Logger _log = LoggerFactory.getLogger(SendData.class);
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private String urlStr;
@@ -51,7 +51,7 @@ public class SendData implements CellCommandListener {
     }
 
     public void init() {
-        LOGGER.warn("Sending information about dCache-instance is activated.");
+        _log.warn("Sending information about dCache-instance is activated.");
         sendDataExecutor.scheduleAtFixedRate(this::sendData,
                 0, 1, TimeUnit.HOURS);
     }
@@ -76,21 +76,21 @@ public class SendData implements CellCommandListener {
         try {
             url = new URL(urlStr + "?date=" + format.format(new Date()));
         } catch (MalformedURLException mue) {
-            LOGGER.error("URL is in wrong format: " + mue);
+            _log.error("URL is in wrong format: " + mue);
             return;
         }
 
         try {
             conn = (HttpsURLConnection) url.openConnection();
         } catch (java.io.IOException ioe) {
-            LOGGER.error("Connection to collector failed: " + ioe);
+            _log.error("Connection to collector failed: " + ioe);
             return;
         }
 
         try {
             conn.setRequestMethod("POST");
         } catch (ProtocolException pe) {
-            LOGGER.error("Error with Protocol while setting request method: " + pe);
+            _log.error("Error with Protocol while setting request method: " + pe);
             return;
         }
         conn.setRequestProperty("Content-Type", "application/json");
@@ -102,19 +102,19 @@ public class SendData implements CellCommandListener {
             out.close();
             response_code = conn.getResponseCode();
             if (response_code != 200 && response_code != 201) {
-                LOGGER.error("Error sending the data. Response: " + response_code + " " + conn.getResponseMessage());
+                _log.error("Error sending the data. Response: " + response_code + " " + conn.getResponseMessage());
             } else {
-                LOGGER.info("Information successfully sent to collector");
+                _log.info("Information successfully sent to collector");
             }
         } catch (java.io.IOException ioe) {
-            LOGGER.error("Error while sending to collector: " + ioe);
+            _log.error("Error while sending to collector: " + ioe);
             return;
         }
 
         try {
             response_code = conn.getResponseCode();
         } catch (java.io.IOException ioe) {
-            LOGGER.error("Error getting response code: " + ioe);
+            _log.error("Error getting response code: " + ioe);
         }
     }
 }

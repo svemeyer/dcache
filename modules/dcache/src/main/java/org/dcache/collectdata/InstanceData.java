@@ -27,7 +27,7 @@ public class InstanceData {
     private String version;
     private double storage;
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(InstanceData.class);
+    private static final Logger _log = LoggerFactory.getLogger(InstanceData.class);
 
     @Required
     public void setPoolManagerStub(CellStub poolManagerStub) {
@@ -85,7 +85,7 @@ public class InstanceData {
             return space;
 
         } catch (Exception e) {
-            LOGGER.error("Could not get storage information; set storage to -1.0. This was caused by: " + e);
+            _log.error("Could not get storage information; set storage to -1.0. This was caused by: " + e);
             return -1.0;
         }
     }
