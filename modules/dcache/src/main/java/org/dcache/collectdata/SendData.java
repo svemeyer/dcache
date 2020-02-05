@@ -30,12 +30,7 @@ public class SendData implements CellCommandListener {
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private String urlStr;
-
-    //self-signed-certificate workaround TODO remove
-    static {
-        HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> hostname.equals("xxxxx"));
-    }
-
+    
     @Required
     public void setUrlStr(String url) {
         this.urlStr = url;
