@@ -40,9 +40,7 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private String urlStr;
-
-
-
+    
     @Required
     public void setUrlStr(String url) {
         this.urlStr = url;
