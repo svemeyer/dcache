@@ -11,21 +11,20 @@
     <context:annotation-config/>
 
     <bean id="poolManagerStub" class="org.dcache.cells.CellStub">
-        <property name="destination" value="${nfs.service.poolmanager}"/>
+        <property name="destination" value="${collectdata.service.poolmanager}"/>
         <property name="timeout" value="30000"/>
     </bean>
 
-    <bean id="instance-data" class="org.dcache.collectdata.InstanceData" init-method="init">
+    <bean id="instance-data" class="org.dcache.collectdata.InstanceData">
         <property name="poolManagerStub" ref="poolManagerStub"/>
-        <property name="siteid" value="${siteid}"/>
-        <property name="lon" value="${lon}"/>
-        <property name="lat" value="${lat}"/>
+        <property name="siteName" value="${collectdata.instance.site-name}"/>
+        <property name="latitude" value="${collectdata.instance.location.latitude}"/>
+        <property name="longitude" value="${collectdata.instance.location.longitude}"/>
     </bean>
 
-    <bean id="sendData" class="org.dcache.collectdata.SendData"
-        init-method="init" destroy-method="shutdown">
+    <bean id="sendData" class="org.dcache.collectdata.SendData">
         <property name="instanceData" ref="instance-data"/>
-        <property name="urlStr" value="${db_url}"/>
+        <property name="urlStr" value="${collectdata.destination.url}"/>
     </bean>
 
 

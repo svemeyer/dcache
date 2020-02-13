@@ -1,6 +1,15 @@
 package org.dcache.collectdata;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dmg.cells.nucleus.CellCommandListener;
+import dmg.cells.nucleus.CellLifeCycleAware;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.utils.URIBuilder;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.dcache.util.CDCScheduledExecutorServiceDecorator;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
@@ -10,6 +19,7 @@ import javax.net.ssl.HttpsURLConnection;
 import java.io.OutputStreamWriter;
 import java.net.MalformedURLException;
 import java.net.ProtocolException;
+import java.net.URI;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -24,13 +34,15 @@ import java.util.concurrent.*;
  * at an interval of one hour.
  */
 
-public class SendData implements CellCommandListener {
+public class SendData implements CellCommandListener, CellLifeCycleAware {
     private static final Logger _log = LoggerFactory.getLogger(SendData.class);
 
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private String urlStr;
-    
+
+
+
     @Required
     public void setUrlStr(String url) {
         this.urlStr = url;
@@ -41,19 +53,20 @@ public class SendData implements CellCommandListener {
         this.instanceData = instanceData;
     }
 
-
     public SendData() {
         sendDataExecutor = new CDCScheduledExecutorServiceDecorator( Executors.newScheduledThreadPool(1));
     }
 
-    public void init() {
-        _log.warn("Sending information about dCache-instance is activated.");
-        sendDataExecutor.scheduleAtFixedRate(this::sendData,
-                0, 1, TimeUnit.HOURS);
+    @Override
+    public void beforeStop() {
+        sendDataExecutor.shutdown();
     }
 
-    public void shutdown() {
-        sendDataExecutor.shutdown();
+    @Override
+    public void afterStart() {
+        _log.warn("Sending information about dCache-instance to {} is activated.", urlStr);
+        sendDataExecutor.scheduleAtFixedRate(this::sendData,
+                0, 1, TimeUnit.HOURS);
     }
 
     /**
@@ -63,54 +76,40 @@ public class SendData implements CellCommandListener {
     private void sendData() {
         instanceData.updateData();
 
-        String json_body = instanceData.toJson();
-        SimpleDateFormat format = new SimpleDateFormat("MM-dd-yyyy");
-        URL url;
-        HttpsURLConnection conn;
-        int response_code = 0;
+        ObjectMapper jackson = new ObjectMapper();
+//        try {
+//            _log.error("Jackson vs JSON Object:\n{}\n{}", jackson.writeValueAsString(instanceData), instanceData.toJson());
+//        } catch (Exception e) {
+//            _log.error("Jackson error: ", e);
+//        }
+//        _log.error("JSON Object:\n{}", instanceData.toJson());
+
+//        String json_body = instanceData.toJson();
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
 
         try {
-            url = new URL(urlStr + "?date=" + format.format(new Date()));
-        } catch (MalformedURLException mue) {
-            _log.error("URL is in wrong format: " + mue);
-            return;
-        }
 
-        try {
-            conn = (HttpsURLConnection) url.openConnection();
-        } catch (java.io.IOException ioe) {
-            _log.error("Connection to collector failed: " + ioe);
-            return;
-        }
+            CloseableHttpClient httpClient = HttpClients.createDefault();
 
-        try {
-            conn.setRequestMethod("POST");
-        } catch (ProtocolException pe) {
-            _log.error("Error with Protocol while setting request method: " + pe);
-            return;
-        }
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setDoOutput(true);
+            URI uri = new URIBuilder(this.urlStr)
+                    .setParameter("date", format.format(new Date()))
+                    .build();
 
-        try {
-            OutputStreamWriter out = new OutputStreamWriter(conn.getOutputStream());
-            out.write(json_body);
-            out.close();
-            response_code = conn.getResponseCode();
-            if (response_code != 200 && response_code != 201) {
-                _log.error("Error sending the data. Response: " + response_code + " " + conn.getResponseMessage());
+            HttpPost httpPost = new HttpPost(uri);
+
+            httpPost.setEntity(new StringEntity(jackson.writeValueAsString(instanceData)));
+            httpPost.setHeader("Content-Type", "application/json");
+            CloseableHttpResponse response = httpClient.execute(httpPost);
+
+            response.close();
+
+            if (response.getStatusLine().getStatusCode() != 201 && response.getStatusLine().getStatusCode() != 200) {
+                _log.error("Error sending data to {}. Response: {}", uri.toString(), response.toString());
             } else {
-                _log.info("Information successfully sent to collector");
+                _log.info("Information successfully sent to {}", uri.toString());
             }
-        } catch (java.io.IOException ioe) {
-            _log.error("Error while sending to collector: " + ioe);
-            return;
-        }
-
-        try {
-            response_code = conn.getResponseCode();
-        } catch (java.io.IOException ioe) {
-            _log.error("Error getting response code: " + ioe);
+        } catch (Exception e) {
+            _log.error("Sending information to collector failed. Reason: {}", e.toString());
         }
     }
 }
