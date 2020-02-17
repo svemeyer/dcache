@@ -1,0 +1,2 @@
+create org.dcache.cells.UniversalSpringCell "${telemetry.cell.name}" \
+    "classpath:org/dcache/telemetry/telemetry.xml"
