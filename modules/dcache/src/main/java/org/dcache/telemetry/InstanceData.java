@@ -3,9 +3,11 @@ package org.dcache.telemetry;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import diskCacheV111.poolManager.CostModule;
 import diskCacheV111.pools.PoolCostInfo;
+import diskCacheV111.util.CacheException;
 import diskCacheV111.vehicles.PoolManagerGetPoolMonitor;
 import dmg.cells.nucleus.CellEndpoint;
 import dmg.cells.nucleus.CellLifeCycleAware;
+import dmg.cells.nucleus.NoRouteToCellException;
 import org.dcache.cells.CellStub;
 import org.dcache.poolmanager.PoolMonitor;
 import org.dcache.util.Version;
@@ -110,8 +112,8 @@ public class InstanceData implements CellLifeCycleAware {
                     .mapToLong(PoolCostInfo.PoolSpaceInfo::getTotalSpace)
                     .sum());
 
-        } catch (Exception e) {
-            _log.error("Could not get storage information; set storage to -1.0. This was caused by: " + e);
+        } catch (CacheException | InterruptedException | NoRouteToCellException e) {
+            _log.error("Could not get storage information; set storage to -1.0. This was caused by: {}", e.toString());
         }
 
         return space;

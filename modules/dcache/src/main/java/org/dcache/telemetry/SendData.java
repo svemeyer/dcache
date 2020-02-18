@@ -14,7 +14,9 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
 
+import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.concurrent.*;
 
 /**
@@ -31,11 +33,16 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
 
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
-    private String urlStr;
+    private URI uri;
+    private CloseableHttpClient httpClient;
 
     @Required
     public void setUrlStr(String url) {
-        this.urlStr = url;
+        try {
+            uri = new URI(url);
+        } catch (URISyntaxException use) {
+            _log.error("Failed to create URL. Reason: {}", use.toString());
+        }
     }
 
     @Required
@@ -54,7 +61,8 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
 
     @Override
     public void afterStart() {
-        _log.warn("Sending information about dCache-instance to {} is activated.", urlStr);
+        _log.warn("Sending information about dCache-instance to {} is activated.", uri.toString());
+        httpClient = HttpClients.createDefault();
         sendDataExecutor.scheduleAtFixedRate(this::sendData,
                 0, 1, TimeUnit.HOURS);
     }
@@ -69,12 +77,6 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
 
         ObjectMapper jackson = new ObjectMapper();
         try {
-
-            CloseableHttpClient httpClient = HttpClients.createDefault();
-
-            URI uri = new URIBuilder(this.urlStr)
-                    .build();
-
             HttpPost httpPost = new HttpPost(uri);
 
             httpPost.setEntity(new StringEntity(jackson.writeValueAsString(instanceData)));
@@ -88,8 +90,8 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
             } else {
                 _log.info("Information successfully sent to {}", uri.toString());
             }
-        } catch (Exception e) {
-            _log.error("Sending information to collector failed. Reason: {}", e.toString());
+        } catch (IOException ioe) {
+            _log.error("Sending Data to {} failed, caused by {}", uri.toString(), ioe);
         }
     }
 }
