@@ -93,8 +93,7 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
                 _log.info("Information successfully sent to {}", uri);
             }
         } catch (IOException ioe) {
-            _log.error("Sending data to {} failed, caused by ", uri, ioe);
-            throw new RuntimeException();
+            _log.error("Sending data to {} failed, caused by {}", uri, ioe);
         }
     }
 }
