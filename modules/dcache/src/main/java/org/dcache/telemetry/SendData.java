@@ -10,6 +10,7 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.dcache.util.CDCScheduledExecutorServiceDecorator;
+import org.dcache.util.FireAndForgetTask;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.annotation.Required;
@@ -39,9 +40,10 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     @Required
     public void setUrlStr(String url) {
         try {
-            uri = new URI(url);
-        } catch (URISyntaxException use) {
-            _log.error("Failed to create URL. Reason: {}", use.toString());
+            uri = URI.create(url);
+        } catch (IllegalArgumentException iae) {
+            _log.error("Failed to create URL. Reason: ", iae);
+            throw new RuntimeException();
         }
     }
 
@@ -61,9 +63,9 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
 
     @Override
     public void afterStart() {
-        _log.warn("Sending information about dCache-instance to {} is activated.", uri.toString());
+        _log.warn("Sending information about dCache-instance to {} is activated.", uri);
         httpClient = HttpClients.createDefault();
-        sendDataExecutor.scheduleAtFixedRate(this::sendData,
+        sendDataExecutor.scheduleAtFixedRate(new FireAndForgetTask(this::sendData),
                 0, 1, TimeUnit.HOURS);
     }
 
@@ -86,12 +88,13 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
             response.close();
 
             if (response.getStatusLine().getStatusCode() != 201 && response.getStatusLine().getStatusCode() != 200) {
-                _log.error("Error sending data to {}. Response: {}", uri.toString(), response.toString());
+                _log.error("Error sending data to {}. Response: {}", uri, response);
             } else {
-                _log.info("Information successfully sent to {}", uri.toString());
+                _log.info("Information successfully sent to {}", uri);
             }
         } catch (IOException ioe) {
-            _log.error("Sending Data to {} failed, caused by {}", uri.toString(), ioe);
+            _log.error("Sending Data to {} failed, caused by {}", uri, ioe);
+            throw new RuntimeException();
         }
     }
 }
