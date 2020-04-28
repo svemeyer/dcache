@@ -3,12 +3,6 @@ package org.dcache.telemetry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dmg.cells.nucleus.CellCommandListener;
 import dmg.cells.nucleus.CellLifeCycleAware;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.client.utils.URIBuilder;
-import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
 import org.dcache.util.CDCScheduledExecutorServiceDecorator;
 import org.dcache.util.FireAndForgetTask;
 import org.slf4j.LoggerFactory;
@@ -17,8 +11,13 @@ import org.springframework.beans.factory.annotation.Required;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URISyntaxException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.concurrent.*;
+
+import static java.time.temporal.ChronoUnit.SECONDS;
 
 /**
  * This is a cell, that collects information about the dCache-instance and sends it once per hour to a central database.
@@ -35,7 +34,6 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private URI uri;
-    private CloseableHttpClient httpClient;
 
     @Required
     public void setUrlStr(String url) {
@@ -64,7 +62,6 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     @Override
     public void afterStart() {
         _log.warn("Sending information about dCache-instance to {} is activated.", uri);
-        httpClient = HttpClients.createDefault();
         sendDataExecutor.scheduleAtFixedRate(new FireAndForgetTask(this::sendData),
                 0, 1, TimeUnit.HOURS);
     }
@@ -78,22 +75,26 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
         instanceData.updateData();
 
         ObjectMapper jackson = new ObjectMapper();
+
         try {
-            HttpPost httpPost = new HttpPost(uri);
+            HttpClient httpClient = HttpClient.newHttpClient();
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(uri)
+                    .version(HttpClient.Version.HTTP_2)
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.of(90, SECONDS))
+                    .POST(HttpRequest.BodyPublishers.ofString(jackson.writeValueAsString(instanceData)))
+                    .build();
 
-            httpPost.setEntity(new StringEntity(jackson.writeValueAsString(instanceData)));
-            httpPost.setHeader("Content-Type", "application/json");
-            CloseableHttpResponse response = httpClient.execute(httpPost);
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
 
-            response.close();
-
-            if (response.getStatusLine().getStatusCode() != 201 && response.getStatusLine().getStatusCode() != 200) {
+            if (response.statusCode() != 201 && response.statusCode() != 200) {
                 _log.error("Error sending data to {}. Response: {}", uri, response);
             } else {
                 _log.info("Information successfully sent to {}", uri);
             }
-        } catch (IOException ioe) {
-            _log.error("Sending data to {} failed, caused by {}", uri, ioe);
+        } catch (InterruptedException | IOException ioe) {
+            _log.error("Sending data to {} failed, caused by: ", uri, ioe);
         }
     }
 }
