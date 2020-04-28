@@ -34,6 +34,8 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     private ScheduledExecutorService sendDataExecutor;
     private InstanceData instanceData;
     private URI uri;
+    private HttpClient httpClient;
+    private static final int HTTP_TIMEOUT = 60;
 
     @Required
     public void setUrlStr(String url) {
@@ -62,6 +64,7 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     @Override
     public void afterStart() {
         _log.warn("Sending information about dCache-instance to {} is activated.", uri);
+        httpClient = HttpClient.newHttpClient();
         sendDataExecutor.scheduleAtFixedRate(new FireAndForgetTask(this::sendData),
                 0, 1, TimeUnit.HOURS);
     }
@@ -77,12 +80,11 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
         ObjectMapper jackson = new ObjectMapper();
 
         try {
-            HttpClient httpClient = HttpClient.newHttpClient();
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(uri)
                     .version(HttpClient.Version.HTTP_2)
                     .header("Content-Type", "application/json")
-                    .timeout(Duration.of(90, SECONDS))
+                    .timeout(Duration.of(HTTP_TIMEOUT, SECONDS))
                     .POST(HttpRequest.BodyPublishers.ofString(jackson.writeValueAsString(instanceData)))
                     .build();
 
