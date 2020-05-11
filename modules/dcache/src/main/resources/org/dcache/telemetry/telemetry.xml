@@ -25,6 +25,7 @@
     <bean id="sendData" class="org.dcache.telemetry.SendData">
         <property name="instanceData" ref="instance-data"/>
         <property name="urlStr" value="${telemetry.destination.url}"/>
+        <property name="enable" value="${telemetry.cell.enable}"/>
     </bean>
 
 

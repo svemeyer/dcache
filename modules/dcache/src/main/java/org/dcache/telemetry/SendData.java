@@ -35,6 +35,7 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
     private InstanceData instanceData;
     private URI uri;
     private HttpClient httpClient;
+    private boolean enable;
     private static final int HTTP_TIMEOUT = 60;
 
     @Required
@@ -52,6 +53,11 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
         this.instanceData = instanceData;
     }
 
+    @Required
+    public void setEnable(boolean enable) {
+        this.enable = enable;
+    }
+
     public SendData() {
         sendDataExecutor = new CDCScheduledExecutorServiceDecorator( Executors.newScheduledThreadPool(1));
     }
@@ -63,6 +69,10 @@ public class SendData implements CellCommandListener, CellLifeCycleAware {
 
     @Override
     public void afterStart() {
+        if (!enable) {
+            throw new RuntimeException("Telemetry cell is configured but not enabled. Configure the enable setting " +
+                    "to run telemetry cell.");
+        }
         _log.warn("Sending information about dCache-instance to {} is activated.", uri);
         httpClient = HttpClient.newHttpClient();
         sendDataExecutor.scheduleAtFixedRate(new FireAndForgetTask(this::sendData),

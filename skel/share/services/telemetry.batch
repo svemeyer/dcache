@@ -1,5 +1,6 @@
 check -strong telemetry.cell.name
 check -strong telemetry.instance.site-name
+check -strong telemetry.cell.enable
 check telemetry.instance.location.latitude
 check telemetry.instance.location.longitude
 check -strong telemetry.service.poolmanager
